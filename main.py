@@ -460,7 +460,20 @@ async def test_email(email: str):
         "success": success,
         "message": "Test email sent! Check your inbox." if success else "Failed to send. Check SMTP configuration."
     }
-
+@app.get("/debug/env")
+async def debug_env():
+    """Check what environment variables the app sees"""
+    return {
+        "smtp_host": os.getenv("SMTP_HOST", "not set"),
+        "smtp_port": os.getenv("SMTP_PORT", "not set"),
+        "smtp_user": "set" if os.getenv("SMTP_USER") else "not set",
+        "smtp_password": "set" if os.getenv("SMTP_PASSWORD") else "not set",
+        "from_email": os.getenv("FROM_EMAIL", "not set"),
+        "checking": {
+            "SMTP_USER exists": bool(os.getenv("SMTP_USER")),
+            "SMTP_PASSWORD exists": bool(os.getenv("SMTP_PASSWORD"))
+        }
+    }
 # ======================== STARTUP ========================
 
 @app.on_event("startup")
