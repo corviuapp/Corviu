@@ -17,6 +17,13 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
+# Debug: Print all environment variables at startup
+print("=== ENVIRONMENT VARIABLES ===")
+for key, value in os.environ.items():
+    if key.startswith("SMTP") or key == "DATABASE_URL":
+        print(f"{key}: {'set' if value else 'not set'}")
+print("============================")
+
 # Initialize FastAPI
 app = FastAPI(
     title="CORVIU API",
