@@ -412,6 +412,7 @@ async def health_check():
 async def autodesk_login():
     """Initiate Autodesk OAuth flow"""
     auth_url = await autodesk_integration.get_auth_url()
+    print(f"DEBUG: Auth URL being used: {auth_url}") 
     return RedirectResponse(url=auth_url)
 
 @app.get("/auth/callback")
