@@ -810,16 +810,275 @@ async def get_autodesk_projects(request: Request, token_id: str):
         "message": f"Found {len(all_projects)} projects across {len(hubs)} hubs"
     }
 
-@app.post("/api/projects/connect-autodesk")
-async def connect_autodesk_project(
+# NEW GET ENDPOINT - Add this BEFORE the POST endpoint
+@app.get("/api/projects/connect-autodesk")
+async def show_connect_form(
     token_id: str,
     autodesk_project_id: str,
-    project_name: str,
-    check_frequency: str = "nightly",
-    email_notifications: bool = False,
-    notification_email: Optional[str] = None
+    project_name: str
 ):
+    """Show form to connect an Autodesk project to CORVIU"""
+    
+    if token_id not in autodesk_tokens:
+        raise HTTPException(status_code=404, detail="Token not found")
+    
+    # Display a connection confirmation page
+    html_response = f"""
+    <html>
+    <head>
+        <title>CORVIU - Connect Project</title>
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                margin: 0;
+                padding: 40px 20px;
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }}
+            .container {{
+                max-width: 600px;
+                width: 100%;
+                background: rgba(255,255,255,0.1);
+                padding: 40px;
+                border-radius: 20px;
+                backdrop-filter: blur(10px);
+                border: 1px solid rgba(255,255,255,0.2);
+            }}
+            h1 {{
+                text-align: center;
+                margin-bottom: 30px;
+                font-size: 2.5em;
+            }}
+            .project-info {{
+                background: rgba(255,255,255,0.1);
+                padding: 20px;
+                border-radius: 12px;
+                margin-bottom: 30px;
+            }}
+            .project-name {{
+                font-size: 1.3em;
+                font-weight: bold;
+                margin-bottom: 10px;
+            }}
+            .project-id {{
+                font-size: 0.9em;
+                opacity: 0.8;
+                font-family: monospace;
+            }}
+            form {{
+                margin-top: 30px;
+            }}
+            .form-group {{
+                margin-bottom: 20px;
+            }}
+            label {{
+                display: block;
+                margin-bottom: 8px;
+                font-weight: 600;
+            }}
+            input[type="email"], select {{
+                width: 100%;
+                padding: 12px;
+                border: none;
+                border-radius: 8px;
+                background: rgba(255,255,255,0.9);
+                color: #333;
+                font-size: 16px;
+            }}
+            .checkbox-group {{
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                margin: 20px 0;
+            }}
+            input[type="checkbox"] {{
+                width: 20px;
+                height: 20px;
+            }}
+            .button-group {{
+                display: flex;
+                gap: 15px;
+                margin-top: 30px;
+            }}
+            .btn {{
+                flex: 1;
+                padding: 15px 30px;
+                border: none;
+                border-radius: 10px;
+                font-size: 16px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.3s;
+                text-decoration: none;
+                text-align: center;
+                display: inline-block;
+            }}
+            .btn-primary {{
+                background: white;
+                color: #667eea;
+            }}
+            .btn-primary:hover {{
+                background: #f0f0f0;
+                transform: translateY(-2px);
+            }}
+            .btn-secondary {{
+                background: rgba(255,255,255,0.2);
+                color: white;
+            }}
+            .btn-secondary:hover {{
+                background: rgba(255,255,255,0.3);
+            }}
+            .success-message {{
+                display: none;
+                background: rgba(76, 175, 80, 0.2);
+                border: 1px solid rgba(76, 175, 80, 0.4);
+                padding: 20px;
+                border-radius: 12px;
+                margin-top: 20px;
+                text-align: center;
+            }}
+            .success-message.show {{
+                display: block;
+            }}
+            .info-box {{
+                background: rgba(33, 150, 243, 0.2);
+                border-left: 4px solid #2196F3;
+                padding: 15px;
+                border-radius: 8px;
+                margin: 20px 0;
+                font-size: 0.95em;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>⚡ Connect Project to CORVIU</h1>
+            
+            <div class="project-info">
+                <div class="project-name">📐 {project_name}</div>
+                <div class="project-id">ID: {autodesk_project_id}</div>
+            </div>
+            
+            <div class="info-box">
+                ℹ️ CORVIU will monitor this project for changes and send you intelligent alerts when important modifications are detected.
+            </div>
+            
+            <form id="connectForm" method="POST" action="/api/projects/connect-autodesk">
+                <input type="hidden" name="token_id" value="{token_id}">
+                <input type="hidden" name="autodesk_project_id" value="{autodesk_project_id}">
+                <input type="hidden" name="project_name" value="{project_name}">
+                
+                <div class="form-group">
+                    <label for="check_frequency">Check Frequency:</label>
+                    <select name="check_frequency" id="check_frequency">
+                        <option value="nightly" selected>Nightly (Recommended)</option>
+                        <option value="hourly">Hourly</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="manual">Manual Only</option>
+                    </select>
+                </div>
+                
+                <div class="checkbox-group">
+                    <input type="checkbox" name="email_notifications" id="email_notifications" value="true" checked>
+                    <label for="email_notifications">Enable Email Notifications</label>
+                </div>
+                
+                <div class="form-group" id="emailGroup">
+                    <label for="notification_email">Notification Email:</label>
+                    <input type="email" name="notification_email" id="notification_email" 
+                           placeholder="pm@yourcompany.com" required>
+                </div>
+                
+                <div class="button-group">
+                    <button type="submit" class="btn btn-primary">
+                        🚀 Connect Project
+                    </button>
+                    <a href="/api/autodesk/projects?token_id={token_id}" class="btn btn-secondary">
+                        ← Back to Projects
+                    </a>
+                </div>
+            </form>
+            
+            <div id="successMessage" class="success-message">
+                ✅ Project connected successfully! CORVIU is now monitoring your project.
+            </div>
+        </div>
+        
+        <script>
+            // Toggle email field based on checkbox
+            document.getElementById('email_notifications').addEventListener('change', function() {{
+                const emailGroup = document.getElementById('emailGroup');
+                const emailInput = document.getElementById('notification_email');
+                if (this.checked) {{
+                    emailGroup.style.display = 'block';
+                    emailInput.required = true;
+                }} else {{
+                    emailGroup.style.display = 'none';
+                    emailInput.required = false;
+                }}
+            }});
+            
+            // Handle form submission
+            document.getElementById('connectForm').addEventListener('submit', async function(e) {{
+                e.preventDefault();
+                
+                const formData = new FormData(this);
+                const data = {{}};
+                formData.forEach((value, key) => {{
+                    data[key] = value;
+                }});
+                
+                // Convert checkbox value
+                data.email_notifications = data.email_notifications === 'true';
+                
+                try {{
+                    const response = await fetch('/api/projects/connect-autodesk', {{
+                        method: 'POST',
+                        headers: {{
+                            'Content-Type': 'application/json',
+                        }},
+                        body: JSON.stringify(data)
+                    }});
+                    
+                    if (response.ok) {{
+                        const result = await response.json();
+                        document.getElementById('successMessage').classList.add('show');
+                        document.getElementById('connectForm').style.display = 'none';
+                        
+                        // Redirect after 3 seconds
+                        setTimeout(() => {{
+                            window.location.href = '/api/autodesk/projects?token_id={token_id}';
+                        }}, 3000);
+                    }} else {{
+                        alert('Failed to connect project. Please try again.');
+                    }}
+                }} catch (error) {{
+                    console.error('Error:', error);
+                    alert('An error occurred. Please try again.');
+                }}
+            }});
+        </script>
+    </body>
+    </html>
+    """
+    
+    return HTMLResponse(content=html_response)
+
+# MODIFIED POST ENDPOINT - Now accepts dict
+@app.post("/api/projects/connect-autodesk")
+async def connect_autodesk_project(data: dict):
     """Connect an Autodesk project to CORVIU for monitoring"""
+    
+    token_id = data.get("token_id")
+    autodesk_project_id = data.get("autodesk_project_id")
+    project_name = data.get("project_name")
+    check_frequency = data.get("check_frequency", "nightly")
+    email_notifications = data.get("email_notifications", False)
+    notification_email = data.get("notification_email", None)
     
     if token_id not in autodesk_tokens:
         raise HTTPException(status_code=404, detail="Token not found")
