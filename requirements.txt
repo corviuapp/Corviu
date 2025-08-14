@@ -1,11 +1,46 @@
+# Core Framework
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
+
+# Database
 sqlalchemy==2.0.23
 psycopg2-binary==2.9.9
+
+# Caching
 redis==5.0.1
+
+# HTTP Client
 httpx==0.25.2
+
+# Data Validation
 pydantic==2.5.2
+
+# Environment Variables
 python-dotenv==1.0.0
+
+# Authentication
 pyjwt==2.8.0
+
+# AI Integration
 openai==0.28.0
+
+# File Upload
 python-multipart==0.0.6
+
+# WebSockets
+websockets==12.0
+
+# Scheduler for Automated Checks
+APScheduler==3.10.4
+
+# Email Support (choose one)
+# For Gmail/SMTP:
+secure-smtplib==0.1.1
+
+# OR for SendGrid (alternative):
+# sendgrid==6.11.0
+
+# OR for AWS SES (alternative):
+# boto3==1.34.0
+
+httpx==0.25.2

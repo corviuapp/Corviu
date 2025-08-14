@@ -1,11 +1,11 @@
 """
 CORVIU - Change Intelligence Platform for AEC
-Updated with Email Reports and Automated Checking
+Updated with Email Reports and Autodesk Integration
 """
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 from datetime import datetime, timedelta
@@ -16,11 +16,14 @@ import asyncio
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import httpx
+import base64
+from urllib.parse import quote
 
 # Debug: Print all environment variables at startup
 print("=== ENVIRONMENT VARIABLES ===")
 for key, value in os.environ.items():
-    if key.startswith("SMTP") or key == "DATABASE_URL":
+    if key.startswith("SMTP") or key == "DATABASE_URL" or key.startswith("AUTODESK"):
         print(f"{key}: {'set' if value else 'not set'}")
 print("============================")
 
@@ -44,6 +47,7 @@ app.add_middleware(
 projects_db = {}
 changes_db = {}
 scheduled_checks = {}
+autodesk_tokens = {}  # Store tokens temporarily
 
 # ======================== EMAIL SERVICE ========================
 
@@ -134,14 +138,108 @@ class EmailService:
 
 email_service = EmailService()
 
+# ======================== AUTODESK INTEGRATION ========================
+
+class AutodeskIntegration:
+    def __init__(self):
+        self.client_id = os.getenv("AUTODESK_CLIENT_ID")
+        self.client_secret = os.getenv("AUTODESK_CLIENT_SECRET")
+        self.callback_url = os.getenv("AUTODESK_CALLBACK_URL", "https://corviu.up.railway.app/auth/callback")
+        self.base_url = "https://developer.api.autodesk.com"
+        
+    async def get_auth_url(self) -> str:
+        """Generate OAuth URL for user authentication"""
+        scopes = "data:read data:write data:create account:read"
+        auth_url = (
+            f"{self.base_url}/authentication/v2/authorize"
+            f"?response_type=code"
+            f"&client_id={self.client_id}"
+            f"&redirect_uri={quote(self.callback_url)}"
+            f"&scope={quote(scopes)}"
+        )
+        return auth_url
+    
+    async def exchange_code_for_token(self, code: str) -> Dict:
+        """Exchange authorization code for access token"""
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self.base_url}/authentication/v2/token",
+                data={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "client_id": self.client_id,
+                    "client_secret": self.client_secret,
+                    "redirect_uri": self.callback_url
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"}
+            )
+            
+            if response.status_code == 200:
+                token_data = response.json()
+                return {
+                    "access_token": token_data["access_token"],
+                    "refresh_token": token_data.get("refresh_token"),
+                    "expires_in": token_data["expires_in"]
+                }
+            else:
+                raise Exception(f"Token exchange failed: {response.text}")
+    
+    async def get_user_info(self, access_token: str) -> Dict:
+        """Get authenticated user information"""
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self.base_url}/userprofile/v1/users/@me",
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            if response.status_code == 200:
+                return response.json()
+            return {}
+    
+    async def get_hubs(self, access_token: str) -> List[Dict]:
+        """Get all hubs (ACC accounts) user has access to"""
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self.base_url}/project/v1/hubs",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/vnd.api+json"
+                }
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("data", [])
+            return []
+    
+    async def get_projects(self, access_token: str, hub_id: str) -> List[Dict]:
+        """Get all projects in a hub"""
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{self.base_url}/project/v1/hubs/{hub_id}/projects",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/vnd.api+json"
+                }
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("data", [])
+            return []
+
+autodesk_integration = AutodeskIntegration()
+
 # ======================== AUTOMATED CHECKER ========================
 
 async def check_project_for_changes(project_id: str) -> Dict:
     """Check a project for changes (automated or manual)"""
     
-    # Simulate change detection
-    # In production, this would connect to Autodesk and compare models
+    # Check if this is an Autodesk-connected project
+    project = projects_db.get(project_id)
+    if project and project.get("autodesk_project_id"):
+        # TODO: Implement real Autodesk model comparison
+        # For now, continue with simulation
+        pass
     
+    # Simulate change detection
     import random
     if random.random() > 0.3:  # 70% chance of changes
         changes = [
@@ -173,7 +271,6 @@ async def check_project_for_changes(project_id: str) -> Dict:
         changes_db[project_id] = changes
         
         # Send email if configured
-        project = projects_db.get(project_id)
         if project and project.get("email"):
             email_service.send_change_report(
                 project["email"],
@@ -261,6 +358,16 @@ async def root():
                     padding: 15px;
                     border-radius: 8px;
                 }
+                .connect-btn {
+                    display: inline-block;
+                    margin-top: 20px;
+                    padding: 12px 30px;
+                    background: white;
+                    color: #667eea;
+                    text-decoration: none;
+                    border-radius: 8px;
+                    font-weight: 600;
+                }
             </style>
         </head>
         <body>
@@ -276,6 +383,7 @@ async def root():
                 <div style="margin-top: 20px; padding: 10px; background: rgba(76, 175, 80, 0.2); border-radius: 8px;">
                     ✅ API Operational | 📊 Dashboard Available
                 </div>
+                <a href="/auth/login" class="connect-btn">Connect Autodesk Account</a>
             </div>
         </body>
     </html>
@@ -297,6 +405,187 @@ async def health_check():
         "projects_monitored": len(projects_db),
         "checks_scheduled": len([p for p in projects_db.values() if p.get("check_frequency") == "nightly"])
     }
+
+# ======================== AUTODESK OAUTH ENDPOINTS ========================
+
+@app.get("/auth/login")
+async def autodesk_login():
+    """Initiate Autodesk OAuth flow"""
+    auth_url = await autodesk_integration.get_auth_url()
+    return RedirectResponse(url=auth_url)
+
+@app.get("/auth/callback")
+async def auth_callback(code: str):
+    """Handle OAuth callback from Autodesk"""
+    try:
+        # Exchange code for token
+        token_data = await autodesk_integration.exchange_code_for_token(code)
+        
+        # Store token temporarily (in production, use database)
+        token_id = str(uuid.uuid4())[:8]
+        autodesk_tokens[token_id] = token_data
+        
+        # Get user info
+        user_info = await autodesk_integration.get_user_info(token_data["access_token"])
+        
+        # Return success page with token info
+        html_response = f"""
+        <html>
+        <head>
+            <title>CORVIU - Autodesk Connected</title>
+            <style>
+                body {{
+                    font-family: -apple-system, sans-serif;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    height: 100vh;
+                    margin: 0;
+                }}
+                .container {{
+                    text-align: center;
+                    padding: 40px;
+                    background: rgba(255,255,255,0.1);
+                    border-radius: 20px;
+                    max-width: 600px;
+                }}
+                .success {{
+                    background: rgba(76, 175, 80, 0.2);
+                    padding: 20px;
+                    border-radius: 8px;
+                    margin: 20px 0;
+                }}
+                .token {{
+                    background: rgba(0,0,0,0.2);
+                    padding: 10px;
+                    border-radius: 4px;
+                    word-break: break-all;
+                    font-family: monospace;
+                }}
+                .next-steps {{
+                    margin-top: 30px;
+                    padding: 20px;
+                    background: rgba(255,255,255,0.1);
+                    border-radius: 8px;
+                }}
+                a {{
+                    color: white;
+                    text-decoration: underline;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>✅ Autodesk Connected!</h1>
+                <div class="success">
+                    <p><strong>User:</strong> {user_info.get('userName', 'Unknown')}</p>
+                    <p><strong>Email:</strong> {user_info.get('emailId', 'Unknown')}</p>
+                    <p><strong>Token ID:</strong> <span class="token">{token_id}</span></p>
+                </div>
+                
+                <div class="next-steps">
+                    <h3>Next Steps:</h3>
+                    <p>Use your token ID to:</p>
+                    <ol style="text-align: left;">
+                        <li>List your projects: <br><code>/api/autodesk/projects?token_id={token_id}</code></li>
+                        <li>Connect a project to CORVIU for monitoring</li>
+                        <li>Set up email notifications</li>
+                    </ol>
+                </div>
+                
+                <p style="margin-top: 20px;">
+                    <a href="/api/autodesk/projects?token_id={token_id}">View Your Projects →</a>
+                </p>
+            </div>
+        </body>
+        </html>
+        """
+        
+        return HTMLResponse(content=html_response)
+        
+    except Exception as e:
+        return {"error": str(e), "message": "Failed to authenticate with Autodesk"}
+
+@app.get("/api/autodesk/projects")
+async def get_autodesk_projects(token_id: str):
+    """List all Autodesk projects user has access to"""
+    
+    # Get token from storage
+    token_data = autodesk_tokens.get(token_id)
+    if not token_data:
+        raise HTTPException(status_code=401, detail="Invalid or expired token ID")
+    
+    access_token = token_data["access_token"]
+    
+    # Get hubs
+    hubs = await autodesk_integration.get_hubs(access_token)
+    
+    all_projects = []
+    for hub in hubs:
+        hub_id = hub["id"]
+        hub_name = hub.get("attributes", {}).get("name", "Unknown Hub")
+        
+        # Get projects in each hub
+        projects = await autodesk_integration.get_projects(access_token, hub_id)
+        
+        for project in projects:
+            all_projects.append({
+                "hub_id": hub_id,
+                "hub_name": hub_name,
+                "project_id": project["id"],
+                "project_name": project.get("attributes", {}).get("name"),
+                "project_type": project.get("type")
+            })
+    
+    return {
+        "count": len(all_projects),
+        "projects": all_projects,
+        "message": f"Found {len(all_projects)} projects across {len(hubs)} hubs"
+    }
+
+@app.post("/api/projects/connect-autodesk")
+async def connect_autodesk_project(
+    token_id: str,
+    hub_id: str,
+    project_id: str,
+    project_name: str,
+    email: str
+):
+    """Connect an Autodesk project to CORVIU for monitoring"""
+    
+    # Verify token
+    token_data = autodesk_tokens.get(token_id)
+    if not token_data:
+        raise HTTPException(status_code=401, detail="Invalid or expired token ID")
+    
+    # Create CORVIU project
+    corviu_project_id = str(uuid.uuid4())[:8]
+    
+    projects_db[corviu_project_id] = {
+        "id": corviu_project_id,
+        "name": project_name,
+        "autodesk_hub_id": hub_id,
+        "autodesk_project_id": project_id,
+        "autodesk_token_id": token_id,  # Store token reference
+        "email": email,
+        "check_frequency": "nightly",
+        "created_at": datetime.utcnow().isoformat()
+    }
+    
+    return {
+        "success": True,
+        "corviu_project_id": corviu_project_id,
+        "message": f"Project '{project_name}' connected for monitoring",
+        "next_steps": [
+            "CORVIU will check for changes nightly at 2 AM",
+            f"Reports will be sent to {email}",
+            "You can trigger manual checks anytime"
+        ]
+    }
+
+# ======================== EXISTING ENDPOINTS (unchanged) ========================
 
 @app.post("/api/projects")
 async def create_project(project: ProjectCreate):
@@ -467,6 +756,7 @@ async def test_email(email: str):
         "success": success,
         "message": "Test email sent! Check your inbox." if success else "Failed to send. Check SMTP configuration."
     }
+
 @app.get("/debug/env")
 async def debug_env():
     """Check what environment variables the app sees"""
@@ -476,11 +766,15 @@ async def debug_env():
         "smtp_user": "set" if os.getenv("SMTP_USER") else "not set",
         "smtp_password": "set" if os.getenv("SMTP_PASSWORD") else "not set",
         "from_email": os.getenv("FROM_EMAIL", "not set"),
+        "autodesk_client_id": "set" if os.getenv("AUTODESK_CLIENT_ID") else "not set",
+        "autodesk_client_secret": "set" if os.getenv("AUTODESK_CLIENT_SECRET") else "not set",
         "checking": {
             "SMTP_USER exists": bool(os.getenv("SMTP_USER")),
-            "SMTP_PASSWORD exists": bool(os.getenv("SMTP_PASSWORD"))
+            "SMTP_PASSWORD exists": bool(os.getenv("SMTP_PASSWORD")),
+            "AUTODESK configured": bool(os.getenv("AUTODESK_CLIENT_ID"))
         }
     }
+
 # ======================== STARTUP ========================
 
 @app.on_event("startup")
@@ -494,6 +788,7 @@ async def startup_event():
     """)
     print("✅ API Started")
     print("📧 Email Reports: " + ("Configured" if os.getenv("SMTP_USER") else "Not configured"))
+    print("🔐 Autodesk Integration: " + ("Configured" if os.getenv("AUTODESK_CLIENT_ID") else "Not configured"))
     print("🕒 Automated Checks: Enabled")
     
     # Start background scheduler
