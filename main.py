@@ -3,7 +3,7 @@ CORVIU - Change Intelligence Platform for AEC
 Updated with Email Reports and Autodesk Integration
 """
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
@@ -593,7 +593,7 @@ async def auth_callback(code: str):
 # ======================== PROJECT MANAGEMENT ENDPOINTS ========================
 
 @app.get("/api/autodesk/projects")
-async def get_autodesk_projects(token_id: str):
+async def get_autodesk_projects(request: Request, token_id: str):
     """List all Autodesk projects user has access to"""
     
     if token_id not in autodesk_tokens:
@@ -622,6 +622,188 @@ async def get_autodesk_projects(token_id: str):
                 "scopes": project.get("attributes", {}).get("scopes", [])
             })
     
+    # Check if request is from a browser
+    accept_header = request.headers.get("accept", "")
+    if "text/html" in accept_header:
+        # Return HTML view for browser
+        html_response = f"""
+        <html>
+        <head>
+            <title>CORVIU - Your Autodesk Projects</title>
+            <style>
+                body {{
+                    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    padding: 40px 20px;
+                    margin: 0;
+                    min-height: 100vh;
+                }}
+                .container {{
+                    max-width: 1200px;
+                    margin: 0 auto;
+                }}
+                h1 {{
+                    text-align: center;
+                    font-size: 3em;
+                    margin-bottom: 10px;
+                    text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+                }}
+                .stats {{
+                    text-align: center;
+                    margin: 30px 0;
+                    font-size: 1.2em;
+                    opacity: 0.9;
+                }}
+                .stats-badge {{
+                    display: inline-block;
+                    background: rgba(255,255,255,0.2);
+                    padding: 8px 16px;
+                    border-radius: 20px;
+                    margin: 0 10px;
+                }}
+                .projects-grid {{
+                    display: grid;
+                    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+                    gap: 25px;
+                    margin-top: 40px;
+                }}
+                .project-card {{
+                    background: rgba(255,255,255,0.1);
+                    padding: 25px;
+                    border-radius: 16px;
+                    backdrop-filter: blur(10px);
+                    border: 1px solid rgba(255,255,255,0.2);
+                    transition: transform 0.3s, box-shadow 0.3s;
+                }}
+                .project-card:hover {{
+                    transform: translateY(-5px);
+                    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+                }}
+                .project-icon {{
+                    font-size: 2em;
+                    margin-bottom: 15px;
+                }}
+                .project-name {{
+                    font-size: 1.3em;
+                    font-weight: bold;
+                    margin-bottom: 12px;
+                    line-height: 1.3;
+                }}
+                .project-info {{
+                    opacity: 0.8;
+                    font-size: 0.9em;
+                    margin: 5px 0;
+                }}
+                .btn {{
+                    display: inline-block;
+                    padding: 12px 24px;
+                    background: white;
+                    color: #667eea;
+                    text-decoration: none;
+                    border-radius: 8px;
+                    margin-top: 15px;
+                    font-weight: 600;
+                    transition: all 0.3s;
+                    text-align: center;
+                }}
+                .btn:hover {{
+                    background: #f0f0f0;
+                    transform: scale(1.05);
+                }}
+                .back-link {{
+                    text-align: center;
+                    margin-top: 40px;
+                }}
+                .back-link a {{
+                    color: white;
+                    text-decoration: none;
+                    opacity: 0.8;
+                    transition: opacity 0.3s;
+                }}
+                .back-link a:hover {{
+                    opacity: 1;
+                }}
+                .empty-state {{
+                    text-align: center;
+                    padding: 60px 20px;
+                    background: rgba(255,255,255,0.1);
+                    border-radius: 16px;
+                    margin-top: 40px;
+                }}
+                .empty-state h2 {{
+                    font-size: 2em;
+                    margin-bottom: 20px;
+                }}
+                .hub-label {{
+                    display: inline-block;
+                    background: rgba(255,255,255,0.15);
+                    padding: 4px 8px;
+                    border-radius: 4px;
+                    font-size: 0.8em;
+                    margin-top: 8px;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🏗️ Your Autodesk Projects</h1>
+                <div class="stats">
+                    <span class="stats-badge">📁 {len(hubs)} Hub{'s' if len(hubs) != 1 else ''}</span>
+                    <span class="stats-badge">📐 {len(all_projects)} Project{'s' if len(all_projects) != 1 else ''}</span>
+                </div>
+        """
+        
+        if all_projects:
+            html_response += '<div class="projects-grid">'
+            
+            # Define icons for different project types
+            project_icons = ["🏢", "🏗️", "🏛️", "🌉"]
+            
+            for i, project in enumerate(all_projects):
+                icon = project_icons[i % len(project_icons)]
+                # URL encode the project name for the connect endpoint
+                encoded_name = quote(project['project_name'])
+                
+                html_response += f"""
+                    <div class="project-card">
+                        <div class="project-icon">{icon}</div>
+                        <div class="project-name">{project['project_name']}</div>
+                        <div class="project-info">📍 Hub: {project['hub_name']}</div>
+                        <div class="hub-label">ID: {project['project_id'][:20]}...</div>
+                        <a href="/api/projects/connect-autodesk?token_id={token_id}&autodesk_project_id={project['project_id']}&project_name={encoded_name}" class="btn">
+                            ⚡ Connect to CORVIU
+                        </a>
+                    </div>
+                """
+            
+            html_response += '</div>'
+        else:
+            html_response += """
+                <div class="empty-state">
+                    <h2>📭 No Projects Found</h2>
+                    <p>We couldn't find any projects in your Autodesk account.</p>
+                    <p style="margin-top: 20px;">Make sure you have:</p>
+                    <ul style="text-align: left; display: inline-block; margin-top: 20px;">
+                        <li>Active projects in ACC or BIM 360</li>
+                        <li>Proper permissions to access projects</li>
+                        <li>Authorized the CORVIU app in your ACC account</li>
+                    </ul>
+                </div>
+            """
+        
+        html_response += """
+                <div class="back-link">
+                    <a href="/">← Back to Home</a>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        return HTMLResponse(content=html_response)
+    
+    # Return JSON for API calls
     return {
         "count": len(all_projects),
         "projects": all_projects,
