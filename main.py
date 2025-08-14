@@ -1,6 +1,7 @@
 """
 CORVIU - Change Intelligence Platform for AEC
 Updated with Email Reports and Autodesk Integration
+PART 1/3: Headers through Autodesk Integration Class
 """
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
@@ -307,48 +308,285 @@ class AutodeskIntegration:
                 print(f"[ERROR] Exception getting projects: {str(e)}")
                 
         return []
+    
+    # ===== NEW METHODS FOR REAL CHANGE DETECTION =====
+    async def get_project_folders(self, access_token: str, hub_id: str, project_id: str) -> List[Dict]:
+        """Get all folders in a project"""
+        print(f"[DEBUG] Getting folders for project: {project_id}")
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                # Get top folders
+                response = await client.get(
+                    f"{self.base_url}/project/v1/hubs/{hub_id}/projects/{project_id}/topFolders",
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Content-Type": "application/vnd.api+json"
+                    }
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    folders = data.get("data", [])
+                    print(f"[DEBUG] Found {len(folders)} top folders")
+                    return folders
+                else:
+                    print(f"[ERROR] Failed to get folders: {response.status_code}")
+                    return []
+                    
+            except Exception as e:
+                print(f"[ERROR] Exception getting folders: {str(e)}")
+                return []
+    
+    async def get_folder_contents(self, access_token: str, project_id: str, folder_id: str) -> List[Dict]:
+        """Get contents of a folder (files and subfolders)"""
+        print(f"[DEBUG] Getting contents of folder: {folder_id}")
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(
+                    f"{self.base_url}/data/v1/projects/{project_id}/folders/{folder_id}/contents",
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Content-Type": "application/vnd.api+json"
+                    }
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    items = data.get("data", [])
+                    
+                    # Separate files and folders
+                    files = [item for item in items if item.get("type") == "items"]
+                    folders = [item for item in items if item.get("type") == "folders"]
+                    
+                    print(f"[DEBUG] Found {len(files)} files and {len(folders)} subfolders")
+                    return items
+                else:
+                    print(f"[ERROR] Failed to get folder contents: {response.status_code}")
+                    return []
+                    
+            except Exception as e:
+                print(f"[ERROR] Exception getting folder contents: {str(e)}")
+                return []
+    
+    async def get_item_versions(self, access_token: str, project_id: str, item_id: str) -> List[Dict]:
+        """Get all versions of a file/model"""
+        print(f"[DEBUG] Getting versions for item: {item_id}")
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(
+                    f"{self.base_url}/data/v1/projects/{project_id}/items/{item_id}/versions",
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Content-Type": "application/vnd.api+json"
+                    }
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    versions = data.get("data", [])
+                    print(f"[DEBUG] Found {len(versions)} versions")
+                    
+                    for version in versions:
+                        attrs = version.get("attributes", {})
+                        print(f"[DEBUG] Version {attrs.get('versionNumber')}: {attrs.get('name')} - {attrs.get('lastModifiedTime')}")
+                    
+                    return versions
+                else:
+                    print(f"[ERROR] Failed to get versions: {response.status_code}")
+                    return []
+                    
+            except Exception as e:
+                print(f"[ERROR] Exception getting versions: {str(e)}")
+                return []
 
 autodesk_integration = AutodeskIntegration()
 
-# ======================== AUTOMATED CHECKER ========================
+# === END OF PART 1 ===
+# === PART 2/3: Change Detection Functions and API Endpoints ===
+
+# ======================== AUTOMATED CHECKER WITH REAL DETECTION ========================
 async def check_project_for_changes(project_id: str):
-    """Simulate checking a project for changes"""
+    """Check for real changes in Autodesk project models"""
     project = projects_db.get(project_id)
     if not project:
         return
     
-    # Simulate finding changes (in production, this would compare models)
-    mock_changes = [
-        {
-            "id": str(uuid.uuid4()),
-            "element_name": "Level 2 Slab",
-            "description": "Moved 75mm north",
-            "cost_impact": 12500,
-            "priority": "critical",
-            "detected_at": datetime.now().isoformat()
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "element_name": "Light Fixtures",
-            "description": "12 new fixtures added",
-            "cost_impact": 3200,
-            "priority": "medium",
-            "detected_at": datetime.now().isoformat()
-        }
-    ]
+    print(f"[INFO] Starting real change detection for project: {project['name']}")
     
-    # Store changes
-    changes_db[project_id] = mock_changes
+    # Get the Autodesk project details
+    autodesk_project_id = project.get("autodesk_project_id")
+    if not autodesk_project_id:
+        print(f"[ERROR] No Autodesk project ID for {project_id}")
+        # Fall back to mock changes
+        mock_changes = [
+            {
+                "id": str(uuid.uuid4()),
+                "element_name": "Demo: Level 2 Slab",
+                "description": "No Autodesk project linked",
+                "cost_impact": 12500,
+                "priority": "medium",
+                "detected_at": datetime.now().isoformat()
+            }
+        ]
+        changes_db[project_id] = mock_changes
+        return mock_changes
     
-    # Send email if configured
-    if project.get("email_notifications") and project.get("notification_email"):
-        await email_service.send_change_report(
-            project["notification_email"],
-            project["name"],
-            mock_changes
-        )
+    # Get token for authentication
+    token_id = project.get("token_id")
+    if not token_id or token_id not in autodesk_tokens:
+        print(f"[ERROR] No valid token for project {project_id}")
+        # Fall back to mock changes for demo
+        mock_changes = [
+            {
+                "id": str(uuid.uuid4()),
+                "element_name": "Demo: Level 2 Slab",
+                "description": "Token expired - using demo data",
+                "cost_impact": 12500,
+                "priority": "medium",
+                "detected_at": datetime.now().isoformat()
+            }
+        ]
+        changes_db[project_id] = mock_changes
+        
+        # Send email if configured
+        if project.get("email_notifications") and project.get("notification_email"):
+            await email_service.send_change_report(
+                project["notification_email"],
+                project["name"],
+                mock_changes
+            )
+        return mock_changes
     
-    return mock_changes
+    token_data = autodesk_tokens[token_id]
+    access_token = token_data["access_token"]
+    
+    # Parse the Autodesk project ID to get hub
+    # Format is usually: b.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+    parts = autodesk_project_id.split(".")
+    if len(parts) >= 2:
+        hub_id = f"{parts[0]}.{parts[1].split('-')[0]}"
+    
+    try:
+        # 1. Get project folders
+        folders = await autodesk_integration.get_project_folders(access_token, autodesk_project_id, autodesk_project_id)
+        
+        # Look for Project Files folder
+        project_files_folder = None
+        for folder in folders:
+            folder_name = folder.get("attributes", {}).get("name", "")
+            if "Project Files" in folder_name or "Plans" in folder_name or "Models" in folder_name:
+                project_files_folder = folder.get("id")
+                break
+        
+        if not project_files_folder and folders:
+            # Use first folder if no Project Files folder found
+            project_files_folder = folders[0].get("id")
+        
+        if not project_files_folder:
+            print(f"[WARNING] No folders found in project")
+            # Return empty changes
+            changes_db[project_id] = []
+            return []
+        
+        # 2. Get folder contents
+        contents = await autodesk_integration.get_folder_contents(access_token, autodesk_project_id, project_files_folder)
+        
+        # Find model files
+        model_files = []
+        for item in contents:
+            if item.get("type") == "items":
+                file_name = item.get("attributes", {}).get("displayName", "")
+                # Look for Revit, CAD, or IFC files
+                if any(ext in file_name.lower() for ext in ['.rvt', '.dwg', '.ifc', '.nwd', '.nwc', '.rvt', '.rfa']):
+                    model_files.append(item)
+                    print(f"[DEBUG] Found model file: {file_name}")
+        
+        # 3. Check versions and detect changes
+        detected_changes = []
+        
+        for model_file in model_files:
+            item_id = model_file.get("id")
+            file_name = model_file.get("attributes", {}).get("displayName", "")
+            
+            # Get versions
+            versions = await autodesk_integration.get_item_versions(access_token, autodesk_project_id, item_id)
+            
+            if len(versions) > 1:
+                # Compare latest two versions
+                latest_version = versions[0]
+                previous_version = versions[1]
+                
+                latest_attrs = latest_version.get("attributes", {})
+                previous_attrs = previous_version.get("attributes", {})
+                
+                # Calculate cost impact based on file type and size
+                file_size_change = latest_attrs.get("storageSize", 0) - previous_attrs.get("storageSize", 0)
+                base_cost = 5000
+                
+                # Adjust cost based on file type
+                if '.rvt' in file_name.lower():
+                    base_cost = 15000
+                elif '.dwg' in file_name.lower():
+                    base_cost = 8000
+                elif '.ifc' in file_name.lower():
+                    base_cost = 10000
+                
+                # Adjust cost based on size change
+                if abs(file_size_change) > 1000000:  # More than 1MB change
+                    base_cost *= 1.5
+                
+                # Determine priority
+                priority = "medium"
+                if '.rvt' in file_name.lower():
+                    priority = "high"
+                    if abs(file_size_change) > 5000000:  # More than 5MB change in Revit file
+                        priority = "critical"
+                
+                # Create change record
+                change = {
+                    "id": str(uuid.uuid4()),
+                    "element_name": file_name,
+                    "description": f"Updated from v{previous_attrs.get('versionNumber', '?')} to v{latest_attrs.get('versionNumber', '?')}",
+                    "cost_impact": base_cost,
+                    "priority": priority,
+                    "detected_at": datetime.now().isoformat(),
+                    "details": {
+                        "file_size_change": file_size_change,
+                        "last_modified": latest_attrs.get("lastModifiedTime"),
+                        "modified_by": latest_attrs.get("lastModifiedUserName", "Unknown"),
+                        "version_number": latest_attrs.get("versionNumber"),
+                        "previous_version": previous_attrs.get("versionNumber"),
+                        "comment": latest_attrs.get("comments", "No comments")
+                    }
+                }
+                
+                detected_changes.append(change)
+        
+        # 4. Store the changes
+        changes_db[project_id] = detected_changes
+        print(f"[SUCCESS] Detected {len(detected_changes)} real changes")
+        
+        # Update last checked time
+        project["last_checked"] = datetime.now().isoformat()
+        
+        # Send email if configured and changes detected
+        if detected_changes and project.get("email_notifications") and project.get("notification_email"):
+            await email_service.send_change_report(
+                project["notification_email"],
+                project["name"],
+                detected_changes
+            )
+        
+        return detected_changes
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to check for changes: {str(e)}")
+        # Fall back to empty changes
+        changes_db[project_id] = []
+        return []
 
 async def schedule_checks():
     """Background task to check projects periodically"""
@@ -590,6 +828,9 @@ async def auth_callback(code: str):
     except Exception as e:
         return {"error": str(e), "message": "Failed to authenticate with Autodesk"}
 
+# === END OF PART 2 ===
+# === PART 3A: Project Management Endpoints ===
+
 # ======================== PROJECT MANAGEMENT ENDPOINTS ========================
 
 @app.get("/api/autodesk/projects")
@@ -810,7 +1051,6 @@ async def get_autodesk_projects(request: Request, token_id: str):
         "message": f"Found {len(all_projects)} projects across {len(hubs)} hubs"
     }
 
-# NEW GET ENDPOINT - Add this BEFORE the POST endpoint
 @app.get("/api/projects/connect-autodesk")
 async def show_connect_form(
     token_id: str,
@@ -1049,9 +1289,9 @@ async def show_connect_form(
                         document.getElementById('successMessage').classList.add('show');
                         document.getElementById('connectForm').style.display = 'none';
                         
-                        // Redirect after 3 seconds
+                        // Redirect to dashboard after 3 seconds
                         setTimeout(() => {{
-                            window.location.href = '/api/autodesk/projects?token_id={token_id}';
+                            window.location.href = '/api/projects/' + result.corviu_project_id + '/dashboard';
                         }}, 3000);
                     }} else {{
                         alert('Failed to connect project. Please try again.');
@@ -1068,7 +1308,10 @@ async def show_connect_form(
     
     return HTMLResponse(content=html_response)
 
-# MODIFIED POST ENDPOINT - Now accepts dict
+# === END OF PART 3A ===
+# === PART 3B: Dashboard and Remaining Endpoints ===
+
+# UPDATED POST ENDPOINT - Now stores token_id and triggers immediate check
 @app.post("/api/projects/connect-autodesk")
 async def connect_autodesk_project(data: dict):
     """Connect an Autodesk project to CORVIU for monitoring"""
@@ -1089,12 +1332,16 @@ async def connect_autodesk_project(data: dict):
         "id": corviu_project_id,
         "name": project_name,
         "autodesk_project_id": autodesk_project_id,
+        "token_id": token_id,  # IMPORTANT: Store the token_id for authentication
         "check_frequency": check_frequency,
         "email_notifications": email_notifications,
         "notification_email": notification_email,
         "created_at": datetime.now().isoformat(),
         "last_checked": None
     }
+    
+    # Immediately check for changes
+    await check_project_for_changes(corviu_project_id)
     
     return {
         "corviu_project_id": corviu_project_id,
@@ -1178,7 +1425,7 @@ async def seed_demo_data():
     return {
         "success": True,
         "project_id": project_id,
-        "demo_url": f"/api/projects/{project_id}/changes"
+        "demo_url": f"/api/projects/{project_id}/dashboard"
     }
 
 @app.get("/api/projects/{project_id}/changes")
@@ -1200,6 +1447,292 @@ async def get_project_changes(project_id: str):
             "total_cost_impact": sum(c.get("cost_impact", 0) for c in changes)
         }
     }
+
+# NEW DASHBOARD ENDPOINT
+@app.get("/api/projects/{project_id}/dashboard")
+async def project_dashboard(project_id: str):
+    """Display project dashboard with detected changes"""
+    
+    if project_id not in projects_db:
+        # Try to find by Autodesk project ID
+        for pid, proj in projects_db.items():
+            if proj.get("autodesk_project_id") == project_id:
+                project_id = pid
+                break
+        else:
+            raise HTTPException(status_code=404, detail="Project not found")
+    
+    project = projects_db[project_id]
+    changes = changes_db.get(project_id, [])
+    
+    # Calculate metrics
+    total_changes = len(changes)
+    critical_count = len([c for c in changes if c.get("priority") == "critical")])
+    high_count = len([c for c in changes if c.get("priority") == "high")])
+    total_cost = sum(c.get("cost_impact", 0) for c in changes)
+    
+    # Build the dashboard HTML
+    dashboard_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>CORVIU Dashboard - {project['name']}</title>
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+                margin: 0;
+                padding: 20px;
+            }}
+            .header {{
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 30px;
+                border-radius: 16px;
+                margin-bottom: 30px;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            }}
+            .header h1 {{
+                margin: 0 0 10px 0;
+                font-size: 2.5em;
+            }}
+            .header p {{
+                opacity: 0.9;
+                margin: 5px 0;
+            }}
+            .metrics {{
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 20px;
+                margin-bottom: 30px;
+            }}
+            .metric-card {{
+                background: white;
+                padding: 25px;
+                border-radius: 12px;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+                text-align: center;
+            }}
+            .metric-value {{
+                font-size: 2.5em;
+                font-weight: bold;
+                color: #667eea;
+                margin-bottom: 10px;
+            }}
+            .metric-label {{
+                color: #666;
+                font-size: 0.9em;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+            }}
+            .changes-section {{
+                background: white;
+                padding: 30px;
+                border-radius: 12px;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            }}
+            .changes-section h2 {{
+                margin-top: 0;
+                color: #333;
+                font-size: 1.8em;
+            }}
+            .change-item {{
+                border-left: 4px solid #667eea;
+                padding: 15px;
+                margin: 15px 0;
+                background: #f9f9f9;
+                border-radius: 8px;
+                transition: transform 0.2s;
+            }}
+            .change-item:hover {{
+                transform: translateX(5px);
+            }}
+            .change-item.critical {{
+                border-left-color: #e74c3c;
+                background: #fff5f5;
+            }}
+            .change-item.high {{
+                border-left-color: #f39c12;
+                background: #fffbf0;
+            }}
+            .change-header {{
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 10px;
+            }}
+            .change-title {{
+                font-weight: bold;
+                font-size: 1.1em;
+                color: #333;
+            }}
+            .change-priority {{
+                padding: 4px 12px;
+                border-radius: 20px;
+                font-size: 0.8em;
+                font-weight: 600;
+                text-transform: uppercase;
+            }}
+            .priority-critical {{
+                background: #e74c3c;
+                color: white;
+            }}
+            .priority-high {{
+                background: #f39c12;
+                color: white;
+            }}
+            .priority-medium {{
+                background: #3498db;
+                color: white;
+            }}
+            .change-details {{
+                color: #666;
+                font-size: 0.95em;
+                margin: 10px 0;
+            }}
+            .change-meta {{
+                display: flex;
+                gap: 20px;
+                margin-top: 10px;
+                font-size: 0.85em;
+                color: #999;
+            }}
+            .action-buttons {{
+                display: flex;
+                gap: 15px;
+                margin-top: 30px;
+            }}
+            .btn {{
+                padding: 12px 24px;
+                border: none;
+                border-radius: 8px;
+                font-size: 1em;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.3s;
+                text-decoration: none;
+                display: inline-block;
+            }}
+            .btn-primary {{
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+            }}
+            .btn-primary:hover {{
+                transform: translateY(-2px);
+                box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+            }}
+            .btn-secondary {{
+                background: white;
+                color: #667eea;
+                border: 2px solid #667eea;
+            }}
+            .btn-secondary:hover {{
+                background: #f5f7ff;
+            }}
+            .empty-state {{
+                text-align: center;
+                padding: 60px;
+                color: #999;
+            }}
+            .empty-state h3 {{
+                font-size: 1.5em;
+                margin-bottom: 15px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>🏗️ {project['name']}</h1>
+            <p>📅 Last Checked: {project.get('last_checked', 'Never')}</p>
+            <p>🔄 Check Frequency: {project.get('check_frequency', 'Manual').title()}</p>
+        </div>
+        
+        <div class="metrics">
+            <div class="metric-card">
+                <div class="metric-value">{total_changes}</div>
+                <div class="metric-label">Total Changes</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{critical_count}</div>
+                <div class="metric-label">Critical Issues</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">{high_count}</div>
+                <div class="metric-label">High Priority</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">${total_cost:,.0f}</div>
+                <div class="metric-label">Total Cost Impact</div>
+            </div>
+        </div>
+        
+        <div class="changes-section">
+            <h2>🔍 Detected Changes</h2>
+    """
+    
+    if changes:
+        for change in changes:
+            priority = change.get('priority', 'medium')
+            priority_class = 'critical' if priority == 'critical' else 'high' if priority == 'high' else ''
+            
+            dashboard_html += f"""
+            <div class="change-item {priority_class}">
+                <div class="change-header">
+                    <div class="change-title">{change.get('element_name', 'Unknown Element')}</div>
+                    <span class="change-priority priority-{priority}">{priority}</span>
+                </div>
+                <div class="change-details">
+                    {change.get('description', 'No description available')}
+                </div>
+                <div class="change-meta">
+                    <span>💰 Cost Impact: ${change.get('cost_impact', 0):,.0f}</span>
+                    <span>🕒 Detected: {change.get('detected_at', 'Unknown')}</span>
+                </div>
+            """
+            
+            # Add additional details if available (for real Autodesk changes)
+            if 'details' in change:
+                details = change['details']
+                dashboard_html += f"""
+                <div class="change-meta" style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #e0e0e0;">
+                    <span>👤 Modified by: {details.get('modified_by', 'Unknown')}</span>
+                    <span>📊 Version: {details.get('version_number', '?')} ← {details.get('previous_version', '?')}</span>
+                    <span>📦 Size change: {details.get('file_size_change', 0):,} bytes</span>
+                </div>
+                """
+            
+            dashboard_html += "</div>"
+    else:
+        dashboard_html += """
+            <div class="empty-state">
+                <h3>✨ No Changes Detected</h3>
+                <p>Your project is up to date. CORVIU will continue monitoring for changes.</p>
+            </div>
+        """
+    
+    dashboard_html += f"""
+            <div class="action-buttons">
+                <form action="/api/projects/{project_id}/check-now" method="POST" style="display: inline;">
+                    <button type="submit" class="btn btn-primary">
+                        🔄 Check Now
+                    </button>
+                </form>
+                <a href="/api/projects/{project_id}/roi" class="btn btn-secondary">
+                    💰 View ROI Report
+                </a>
+                <a href="/" class="btn btn-secondary">
+                    🏠 Back to Home
+                </a>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return HTMLResponse(content=dashboard_html)
+
+# === END OF PART 3B ===
+# === PART 3C: Final Endpoints and Startup ===
 
 @app.get("/api/projects/{project_id}/roi")
 async def get_roi_metrics(project_id: str):
@@ -1294,6 +1827,44 @@ async def debug_env():
         "environment": "production" if os.getenv("DATABASE_URL") else "development"
     }
 
+# Additional utility endpoints
+@app.get("/api/projects")
+async def list_projects():
+    """List all CORVIU projects"""
+    return {
+        "projects": list(projects_db.values()),
+        "total": len(projects_db)
+    }
+
+@app.get("/api/projects/{project_id}")
+async def get_project(project_id: str):
+    """Get project details"""
+    if project_id not in projects_db:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    project = projects_db[project_id]
+    changes = changes_db.get(project_id, [])
+    
+    return {
+        "project": project,
+        "changes_count": len(changes),
+        "last_change": changes[0] if changes else None
+    }
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: str):
+    """Delete a project"""
+    if project_id not in projects_db:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    project_name = projects_db[project_id]["name"]
+    del projects_db[project_id]
+    
+    if project_id in changes_db:
+        del changes_db[project_id]
+    
+    return {"message": f"Project '{project_name}' deleted successfully"}
+
 # ======================== STARTUP TASKS ========================
 
 @app.on_event("startup")
@@ -1310,4 +1881,7 @@ async def startup_event():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
+
+# === END OF COMPLETE CODE ===
