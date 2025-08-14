@@ -50,7 +50,6 @@ scheduled_checks = {}
 autodesk_tokens = {}  # Store tokens temporarily
 
 # ======================== EMAIL SERVICE ========================
-
 class EmailService:
     def __init__(self):
         self.smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
@@ -58,131 +57,167 @@ class EmailService:
         self.smtp_user = os.getenv("SMTP_USER", "")
         self.smtp_password = os.getenv("SMTP_PASSWORD", "")
         self.from_email = os.getenv("FROM_EMAIL", "alerts@corviu.ai")
-    
-    def send_change_report(self, to_email: str, project_name: str, changes: List[Dict]) -> bool:
-        """Send email report when changes detected"""
         
-        if not self.smtp_user or not self.smtp_password:
-            print("Email not configured")
-            return False
-        
+    async def send_change_report(self, to_email: str, project_name: str, changes: List[Dict]):
+        """Send formatted change report email"""
         try:
-            # Calculate summary
+            # Calculate summary metrics
+            total_changes = len(changes)
             critical_count = len([c for c in changes if c.get("priority") == "critical"])
             total_cost = sum(c.get("cost_impact", 0) for c in changes)
             
-            # Create email
-            msg = MIMEMultipart('alternative')
-            msg['Subject'] = f"CORVIU: {len(changes)} Changes in {project_name}"
-            msg['From'] = f"CORVIU <{self.from_email}>"
-            msg['To'] = to_email
-            
-            # HTML content
-            html = f"""
+            # Create HTML email
+            html_content = f"""
             <html>
-            <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                <div style="background: linear-gradient(135deg, #667eea, #764ba2); padding: 30px; text-align: center; color: white;">
-                    <h1>🏗️ CORVIU Alert</h1>
-                    <p>{len(changes)} Changes Detected</p>
-                </div>
-                
-                <div style="padding: 30px;">
-                    <h2>Project: {project_name}</h2>
-                    <p><strong>{critical_count} critical changes</strong> detected with <strong>${total_cost:,.0f}</strong> total impact.</p>
-                    
-                    <h3>Changes Summary:</h3>
-                    <ul>
-            """
-            
-            for change in changes[:5]:  # First 5 changes
-                html += f"""
-                    <li>
-                        <strong>{change.get('element_name')}</strong>: {change.get('description')}
-                        <br>Impact: ${change.get('cost_impact', 0):,.0f} | Priority: {change.get('priority', 'medium').upper()}
-                    </li>
-                """
-            
-            html += f"""
-                    </ul>
-                    
-                    <div style="margin: 30px 0; padding: 20px; background: #f5f5f5; border-radius: 8px;">
-                        <h3>📊 ROI This Week</h3>
-                        <p>Time Saved: <strong>{len(changes) * 0.5:.1f} hours</strong></p>
-                        <p>Value: <strong>${len(changes) * 0.5 * 155:.0f}</strong></p>
+            <head>
+                <style>
+                    body {{ font-family: -apple-system, sans-serif; background: #f5f5f5; }}
+                    .container {{ max-width: 600px; margin: 0 auto; background: white; padding: 20px; }}
+                    .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px; }}
+                    .metrics {{ display: flex; justify-content: space-around; margin: 20px 0; }}
+                    .metric {{ text-align: center; }}
+                    .metric-value {{ font-size: 24px; font-weight: bold; color: #667eea; }}
+                    .changes-list {{ margin: 20px 0; }}
+                    .change-item {{ border-left: 4px solid #667eea; padding: 10px; margin: 10px 0; background: #f9f9f9; }}
+                    .critical {{ border-left-color: #e74c3c; }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="header">
+                        <h1>🏗️ CORVIU Change Report</h1>
+                        <p>Project: {project_name}</p>
                     </div>
                     
-                    <a href="https://corviu.up.railway.app" 
-                       style="display: inline-block; background: #667eea; color: white; padding: 12px 30px; 
-                              text-decoration: none; border-radius: 8px;">
-                        View Full Report
-                    </a>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="metric-value">{total_changes}</div>
+                            <div>Total Changes</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-value">{critical_count}</div>
+                            <div>Critical</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-value">${total_cost:,.0f}</div>
+                            <div>Cost Impact</div>
+                        </div>
+                    </div>
+                    
+                    <div class="changes-list">
+                        <h3>Change Details:</h3>
+            """
+            
+            for change in changes[:10]:  # Limit to top 10 changes
+                priority_class = "critical" if change.get("priority") == "critical" else ""
+                html_content += f"""
+                    <div class="change-item {priority_class}">
+                        <strong>{change.get('element_name')}</strong>: {change.get('description')}
+                        <br>Impact: ${change.get('cost_impact', 0):,.0f} | Priority: {change.get('priority', 'medium').upper()}
+                    </div>
+                """
+            
+            html_content += """
+                    </div>
+                    <p style="text-align: center; color: #666; margin-top: 30px;">
+                        Generated by CORVIU • Change Intelligence Platform
+                    </p>
                 </div>
             </body>
             </html>
             """
             
-            msg.attach(MIMEText(html, 'html'))
+            # Send email
+            msg = MIMEMultipart('alternative')
+            msg['Subject'] = f"🚨 CORVIU Alert: {total_changes} changes in {project_name}"
+            msg['From'] = self.from_email
+            msg['To'] = to_email
             
-            # Send
+            msg.attach(MIMEText(html_content, 'html'))
+            
             with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
                 server.starttls()
-                server.login(self.smtp_user, self.smtp_password)
+                if self.smtp_user and self.smtp_password:
+                    server.login(self.smtp_user, self.smtp_password)
                 server.send_message(msg)
             
-            print(f"✅ Email sent to {to_email}")
             return True
-            
         except Exception as e:
-            print(f"❌ Email failed: {e}")
+            print(f"Email send error: {str(e)}")
             return False
 
 email_service = EmailService()
 
 # ======================== AUTODESK INTEGRATION ========================
-
 class AutodeskIntegration:
     def __init__(self):
         self.client_id = os.getenv("AUTODESK_CLIENT_ID")
         self.client_secret = os.getenv("AUTODESK_CLIENT_SECRET")
         self.callback_url = os.getenv("AUTODESK_CALLBACK_URL", "https://corviu.up.railway.app/auth/callback")
+        self.auth_url = "https://developer.api.autodesk.com/authentication/v2"
         self.base_url = "https://developer.api.autodesk.com"
         
     async def get_auth_url(self) -> str:
-        """Generate OAuth URL for user authentication"""
-        scopes = "data:read data:write data:create account:read"
+        """Generate Autodesk OAuth URL"""
+        # Make sure we're requesting the right scopes
+        scopes = "data:read data:write data:create data:search bucket:create bucket:read bucket:update bucket:delete account:read account:write"
+        
         auth_url = (
-            f"{self.base_url}/authentication/v2/authorize"
+            f"{self.auth_url}/authorize"
             f"?response_type=code"
             f"&client_id={self.client_id}"
             f"&redirect_uri={quote(self.callback_url)}"
-            f"&scope={quote(scopes)}"
+            f"&scope={quote(scopes)}"  # Add comprehensive scopes
         )
+        print(f"[DEBUG] OAuth URL generated with scopes: {scopes}")
         return auth_url
     
     async def exchange_code_for_token(self, code: str) -> Dict:
         """Exchange authorization code for access token"""
         async with httpx.AsyncClient() as client:
+            # Create Basic Auth header
+            credentials = f"{self.client_id}:{self.client_secret}"
+            encoded_credentials = base64.b64encode(credentials.encode()).decode()
+            
             response = await client.post(
-                f"{self.base_url}/authentication/v2/token",
+                f"{self.auth_url}/token",
+                headers={
+                    "Authorization": f"Basic {encoded_credentials}",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "application/json"
+                },
                 data={
                     "grant_type": "authorization_code",
                     "code": code,
-                    "client_id": self.client_id,
-                    "client_secret": self.client_secret,
                     "redirect_uri": self.callback_url
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"}
+                }
             )
             
             if response.status_code == 200:
-                token_data = response.json()
-                return {
-                    "access_token": token_data["access_token"],
-                    "refresh_token": token_data.get("refresh_token"),
-                    "expires_in": token_data["expires_in"]
-                }
+                return response.json()
             else:
-                raise Exception(f"Token exchange failed: {response.text}")
+                print(f"[ERROR] Token exchange failed: {response.status_code}")
+                print(f"[ERROR] Response: {response.text}")
+                raise HTTPException(status_code=400, detail="Failed to exchange code for token")
+    
+    async def refresh_token(self, refresh_token: str) -> Dict:
+        """Refresh access token"""
+        async with httpx.AsyncClient() as client:
+            credentials = f"{self.client_id}:{self.client_secret}"
+            encoded_credentials = base64.b64encode(credentials.encode()).decode()
+            
+            response = await client.post(
+                f"{self.auth_url}/token",
+                headers={
+                    "Authorization": f"Basic {encoded_credentials}",
+                    "Content-Type": "application/x-www-form-urlencoded"
+                },
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token
+                }
+            )
+            return response.json() if response.status_code == 200 else None
     
     async def get_user_info(self, access_token: str) -> Dict:
         """Get authenticated user information"""
@@ -197,222 +232,268 @@ class AutodeskIntegration:
     
     async def get_hubs(self, access_token: str) -> List[Dict]:
         """Get all hubs (ACC accounts) user has access to"""
+        print(f"[DEBUG] Getting hubs with token: {access_token[:20]}...")
+        
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.base_url}/project/v1/hubs",
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                    "Content-Type": "application/vnd.api+json"
-                }
-            )
-            if response.status_code == 200:
-                data = response.json()
-                return data.get("data", [])
-            return []
+            try:
+                response = await client.get(
+                    f"{self.base_url}/project/v1/hubs",
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Content-Type": "application/vnd.api+json"
+                    }
+                )
+                
+                print(f"[DEBUG] Hubs response status: {response.status_code}")
+                print(f"[DEBUG] Hubs response headers: {dict(response.headers)}")
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    print(f"[DEBUG] Hubs response data: {json.dumps(data, indent=2)}")
+                    hubs = data.get("data", [])
+                    print(f"[DEBUG] Found {len(hubs)} hubs")
+                    
+                    # Print hub details
+                    for hub in hubs:
+                        print(f"[DEBUG] Hub: {hub.get('attributes', {}).get('name', 'Unknown')} (ID: {hub.get('id')})")
+                    
+                    return hubs
+                elif response.status_code == 401:
+                    print(f"[ERROR] Authentication failed - token may be expired")
+                    print(f"[ERROR] Response: {response.text}")
+                elif response.status_code == 403:
+                    print(f"[ERROR] Forbidden - check OAuth scopes")
+                    print(f"[ERROR] Response: {response.text}")
+                else:
+                    print(f"[ERROR] Unexpected status: {response.status_code}")
+                    print(f"[ERROR] Response: {response.text}")
+                    
+            except Exception as e:
+                print(f"[ERROR] Exception getting hubs: {str(e)}")
+                
+        return []
     
     async def get_projects(self, access_token: str, hub_id: str) -> List[Dict]:
         """Get all projects in a hub"""
+        print(f"[DEBUG] Getting projects for hub: {hub_id}")
+        
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.base_url}/project/v1/hubs/{hub_id}/projects",
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                    "Content-Type": "application/vnd.api+json"
-                }
-            )
-            if response.status_code == 200:
-                data = response.json()
-                return data.get("data", [])
-            return []
+            try:
+                response = await client.get(
+                    f"{self.base_url}/project/v1/hubs/{hub_id}/projects",
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Content-Type": "application/vnd.api+json"
+                    }
+                )
+                
+                print(f"[DEBUG] Projects response status: {response.status_code}")
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    projects = data.get("data", [])
+                    print(f"[DEBUG] Found {len(projects)} projects in hub {hub_id}")
+                    
+                    # Print project details
+                    for project in projects:
+                        print(f"[DEBUG] Project: {project.get('attributes', {}).get('name', 'Unknown')} (ID: {project.get('id')})")
+                    
+                    return projects
+                else:
+                    print(f"[ERROR] Failed to get projects: {response.status_code}")
+                    print(f"[ERROR] Response: {response.text}")
+                    
+            except Exception as e:
+                print(f"[ERROR] Exception getting projects: {str(e)}")
+                
+        return []
 
 autodesk_integration = AutodeskIntegration()
 
 # ======================== AUTOMATED CHECKER ========================
-
-async def check_project_for_changes(project_id: str) -> Dict:
-    """Check a project for changes (automated or manual)"""
-    
-    # Check if this is an Autodesk-connected project
+async def check_project_for_changes(project_id: str):
+    """Simulate checking a project for changes"""
     project = projects_db.get(project_id)
-    if project and project.get("autodesk_project_id"):
-        # TODO: Implement real Autodesk model comparison
-        # For now, continue with simulation
-        pass
+    if not project:
+        return
     
-    # Simulate change detection
-    import random
-    if random.random() > 0.3:  # 70% chance of changes
-        changes = [
-            {
-                "id": str(uuid.uuid4())[:8],
-                "project_id": project_id,
-                "element_name": "Level 2 Slab",
-                "change_type": "structural",
-                "description": "Slab moved 75mm north",
-                "cost_impact": 45000,
-                "schedule_impact": 3,
-                "priority": "critical",
-                "detected_at": datetime.utcnow().isoformat()
-            },
-            {
-                "id": str(uuid.uuid4())[:8],
-                "project_id": project_id,
-                "element_name": "MEP Coordination",
-                "change_type": "mep",
-                "description": "Ductwork rerouted",
-                "cost_impact": 12000,
-                "schedule_impact": 2,
-                "priority": "high",
-                "detected_at": datetime.utcnow().isoformat()
-            }
-        ]
-        
-        # Store changes
-        changes_db[project_id] = changes
-        
-        # Send email if configured
-        if project and project.get("email"):
-            email_service.send_change_report(
-                project["email"],
-                project["name"],
-                changes
-            )
-        
-        return {
-            "has_changes": True,
-            "change_count": len(changes),
-            "critical_count": len([c for c in changes if c["priority"] == "critical"]),
-            "total_impact": sum(c["cost_impact"] for c in changes)
+    # Simulate finding changes (in production, this would compare models)
+    mock_changes = [
+        {
+            "id": str(uuid.uuid4()),
+            "element_name": "Level 2 Slab",
+            "description": "Moved 75mm north",
+            "cost_impact": 12500,
+            "priority": "critical",
+            "detected_at": datetime.now().isoformat()
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "element_name": "Light Fixtures",
+            "description": "12 new fixtures added",
+            "cost_impact": 3200,
+            "priority": "medium",
+            "detected_at": datetime.now().isoformat()
         }
+    ]
     
-    return {"has_changes": False, "change_count": 0}
+    # Store changes
+    changes_db[project_id] = mock_changes
+    
+    # Send email if configured
+    if project.get("email_notifications") and project.get("notification_email"):
+        await email_service.send_change_report(
+            project["notification_email"],
+            project["name"],
+            mock_changes
+        )
+    
+    return mock_changes
 
-async def run_scheduled_checks():
-    """Background task that runs every hour to check for scheduled checks"""
+async def schedule_checks():
+    """Background task to check projects periodically"""
     while True:
-        current_hour = datetime.now().hour
-        
-        # Check at 2 AM for nightly checks
-        if current_hour == 2:
-            print("🌙 Running nightly checks...")
+        try:
             for project_id, project in projects_db.items():
                 if project.get("check_frequency") == "nightly":
-                    result = await check_project_for_changes(project_id)
-                    print(f"Checked {project['name']}: {result['change_count']} changes")
-        
-        # Wait 1 hour before next check
-        await asyncio.sleep(3600)
+                    await check_project_for_changes(project_id)
+            
+            # Wait 24 hours (in production)
+            await asyncio.sleep(86400)
+        except Exception as e:
+            print(f"Scheduler error: {str(e)}")
+            await asyncio.sleep(3600)  # Retry in 1 hour
 
-# ======================== MODELS ========================
-
-class ProjectCreate(BaseModel):
-    name: str
-    email: Optional[str] = None
-    check_frequency: str = "nightly"  # nightly, hourly, manual
-
-class ChangeSummaryResponse(BaseModel):
-    total_changes: int
-    critical_changes: int
-    total_cost_impact: float
-    total_schedule_impact: float
-    ai_summary: str
-    changes: List[Dict]
-
-# ======================== ENDPOINTS ========================
+# ======================== API ENDPOINTS ========================
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    """CORVIU Landing Page"""
-    return """
+    """Landing page with CORVIU branding"""
+    html_content = """
     <html>
-        <head>
-            <title>CORVIU API</title>
-            <style>
-                body { 
-                    font-family: -apple-system, sans-serif;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    color: white;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    height: 100vh;
-                    margin: 0;
-                }
-                .container {
-                    text-align: center;
-                    padding: 40px;
-                    background: rgba(255,255,255,0.1);
-                    border-radius: 20px;
-                }
-                h1 { font-size: 48px; margin: 0 0 10px 0; }
-                p { font-size: 20px; opacity: 0.9; }
-                .features {
-                    margin: 30px 0;
-                    display: grid;
-                    grid-template-columns: repeat(2, 1fr);
-                    gap: 20px;
-                    text-align: left;
-                }
-                .feature {
-                    background: rgba(255,255,255,0.1);
-                    padding: 15px;
-                    border-radius: 8px;
-                }
-                .connect-btn {
-                    display: inline-block;
-                    margin-top: 20px;
-                    padding: 12px 30px;
-                    background: white;
-                    color: #667eea;
-                    text-decoration: none;
-                    border-radius: 8px;
-                    font-weight: 600;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>🏗️ CORVIU</h1>
-                <p>Automated Change Intelligence for AEC</p>
-                <div class="features">
-                    <div class="feature">✅ Nightly model checking</div>
-                    <div class="feature">📧 Email reports</div>
-                    <div class="feature">🎯 Priority detection</div>
-                    <div class="feature">💰 ROI tracking</div>
+    <head>
+        <title>CORVIU - Change Intelligence Platform</title>
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                margin: 0;
+                padding: 0;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                min-height: 100vh;
+            }
+            .container {
+                text-align: center;
+                padding: 40px;
+                max-width: 800px;
+            }
+            h1 {
+                font-size: 4em;
+                margin-bottom: 20px;
+                text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+            }
+            .tagline {
+                font-size: 1.5em;
+                margin-bottom: 40px;
+                opacity: 0.9;
+            }
+            .features {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 20px;
+                margin: 40px 0;
+            }
+            .feature {
+                background: rgba(255,255,255,0.1);
+                padding: 20px;
+                border-radius: 10px;
+                backdrop-filter: blur(10px);
+            }
+            .cta {
+                margin-top: 40px;
+            }
+            .btn {
+                display: inline-block;
+                padding: 15px 30px;
+                background: white;
+                color: #667eea;
+                text-decoration: none;
+                border-radius: 30px;
+                font-weight: bold;
+                margin: 10px;
+                transition: transform 0.3s;
+            }
+            .btn:hover {
+                transform: translateY(-2px);
+            }
+            .status {
+                margin-top: 60px;
+                padding: 20px;
+                background: rgba(0,0,0,0.2);
+                border-radius: 10px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🏗️ CORVIU</h1>
+            <p class="tagline">Change Intelligence Platform for AEC</p>
+            
+            <div class="features">
+                <div class="feature">
+                    <h3>⚡ 10-Min Setup</h3>
+                    <p>Connect to Autodesk ACC instantly</p>
                 </div>
-                <div style="margin-top: 20px; padding: 10px; background: rgba(76, 175, 80, 0.2); border-radius: 8px;">
-                    ✅ API Operational | 📊 Dashboard Available
+                <div class="feature">
+                    <h3>🔍 Smart Detection</h3>
+                    <p>AI-powered change analysis</p>
                 </div>
-                <a href="/auth/login" class="connect-btn">Connect Autodesk Account</a>
+                <div class="feature">
+                    <h3>💰 ROI Tracking</h3>
+                    <p>Quantified savings metrics</p>
+                </div>
+                <div class="feature">
+                    <h3>📧 Email Alerts</h3>
+                    <p>Automated change reports</p>
+                </div>
             </div>
-        </body>
+            
+            <div class="cta">
+                <a href="/auth/login" class="btn">Connect Autodesk Account</a>
+                <a href="/api/demo/seed" class="btn">Try Demo</a>
+            </div>
+            
+            <div class="status">
+                <h3>System Status</h3>
+                <p>✅ API: Operational | 📊 Projects Monitored: """ + str(len(projects_db)) + """</p>
+            </div>
+        </div>
+    </body>
     </html>
     """
+    return HTMLResponse(content=html_content)
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint for monitoring"""
     return {
         "status": "operational",
-        "service": "CORVIU",
+        "service": "CORVIU API",
         "version": "2.0.0",
-        "features": {
-            "api": "healthy",
-            "email": "configured" if os.getenv("SMTP_USER") else "not configured",
-            "scheduler": "active",
-            "autodesk": "configured" if os.getenv("AUTODESK_CLIENT_ID") else "not configured"
-        },
+        "timestamp": datetime.now().isoformat(),
         "projects_monitored": len(projects_db),
         "checks_scheduled": len([p for p in projects_db.values() if p.get("check_frequency") == "nightly"])
     }
 
-# ======================== AUTODESK OAUTH ENDPOINTS ========================
+# ======================== AUTODESK AUTH ENDPOINTS ========================
 
 @app.get("/auth/login")
-async def autodesk_login():
-    """Initiate Autodesk OAuth flow"""
+async def login():
+    """Redirect to Autodesk OAuth"""
     auth_url = await autodesk_integration.get_auth_url()
-    print(f"DEBUG: Auth URL being used: {auth_url}") 
     return RedirectResponse(url=auth_url)
 
 @app.get("/auth/callback")
@@ -509,15 +590,16 @@ async def auth_callback(code: str):
     except Exception as e:
         return {"error": str(e), "message": "Failed to authenticate with Autodesk"}
 
+# ======================== PROJECT MANAGEMENT ENDPOINTS ========================
+
 @app.get("/api/autodesk/projects")
 async def get_autodesk_projects(token_id: str):
     """List all Autodesk projects user has access to"""
     
-    # Get token from storage
-    token_data = autodesk_tokens.get(token_id)
-    if not token_data:
-        raise HTTPException(status_code=401, detail="Invalid or expired token ID")
+    if token_id not in autodesk_tokens:
+        raise HTTPException(status_code=404, detail="Token not found")
     
+    token_data = autodesk_tokens[token_id]
     access_token = token_data["access_token"]
     
     # Get hubs
@@ -525,7 +607,7 @@ async def get_autodesk_projects(token_id: str):
     
     all_projects = []
     for hub in hubs:
-        hub_id = hub["id"]
+        hub_id = hub.get("id", "")
         hub_name = hub.get("attributes", {}).get("name", "Unknown Hub")
         
         # Get projects in each hub
@@ -535,9 +617,9 @@ async def get_autodesk_projects(token_id: str):
             all_projects.append({
                 "hub_id": hub_id,
                 "hub_name": hub_name,
-                "project_id": project["id"],
-                "project_name": project.get("attributes", {}).get("name"),
-                "project_type": project.get("type")
+                "project_id": project.get("id"),
+                "project_name": project.get("attributes", {}).get("name", "Unknown Project"),
+                "scopes": project.get("attributes", {}).get("scopes", [])
             })
     
     return {
@@ -549,253 +631,242 @@ async def get_autodesk_projects(token_id: str):
 @app.post("/api/projects/connect-autodesk")
 async def connect_autodesk_project(
     token_id: str,
-    hub_id: str,
-    project_id: str,
+    autodesk_project_id: str,
     project_name: str,
-    email: str
+    check_frequency: str = "nightly",
+    email_notifications: bool = False,
+    notification_email: Optional[str] = None
 ):
     """Connect an Autodesk project to CORVIU for monitoring"""
     
-    # Verify token
-    token_data = autodesk_tokens.get(token_id)
-    if not token_data:
-        raise HTTPException(status_code=401, detail="Invalid or expired token ID")
+    if token_id not in autodesk_tokens:
+        raise HTTPException(status_code=404, detail="Token not found")
     
-    # Create CORVIU project
-    corviu_project_id = str(uuid.uuid4())[:8]
-    
+    # Create CORVIU project linked to Autodesk
+    corviu_project_id = str(uuid.uuid4())
     projects_db[corviu_project_id] = {
         "id": corviu_project_id,
         "name": project_name,
-        "autodesk_hub_id": hub_id,
-        "autodesk_project_id": project_id,
-        "autodesk_token_id": token_id,  # Store token reference
-        "email": email,
-        "check_frequency": "nightly",
-        "created_at": datetime.utcnow().isoformat()
+        "autodesk_project_id": autodesk_project_id,
+        "check_frequency": check_frequency,
+        "email_notifications": email_notifications,
+        "notification_email": notification_email,
+        "created_at": datetime.now().isoformat(),
+        "last_checked": None
     }
     
     return {
-        "success": True,
         "corviu_project_id": corviu_project_id,
-        "message": f"Project '{project_name}' connected for monitoring",
-        "next_steps": [
-            "CORVIU will check for changes nightly at 2 AM",
-            f"Reports will be sent to {email}",
-            "You can trigger manual checks anytime"
-        ]
+        "message": f"Project '{project_name}' connected successfully"
     }
-
-# ======================== EXISTING ENDPOINTS (unchanged) ========================
 
 @app.post("/api/projects")
-async def create_project(project: ProjectCreate):
-    """Create a project to monitor"""
-    project_id = str(uuid.uuid4())[:8]
-    
+async def create_project(
+    name: str,
+    check_frequency: str = "nightly",
+    email_notifications: bool = False,
+    notification_email: Optional[str] = None
+):
+    """Create a new project for monitoring"""
+    project_id = str(uuid.uuid4())
     projects_db[project_id] = {
         "id": project_id,
-        "name": project.name,
-        "email": project.email,
-        "check_frequency": project.check_frequency,
-        "created_at": datetime.utcnow().isoformat(),
-        "last_check": None
+        "name": name,
+        "check_frequency": check_frequency,
+        "email_notifications": email_notifications,
+        "notification_email": notification_email,
+        "created_at": datetime.now().isoformat(),
+        "last_checked": None
     }
     
-    return {
-        "success": True,
-        "project_id": project_id,
-        "message": f"Project '{project.name}' created. Checks scheduled: {project.check_frequency}"
-    }
+    return {"project_id": project_id, "message": f"Project '{name}' created successfully"}
 
 @app.post("/api/projects/{project_id}/check-now")
-async def manual_check(project_id: str, background_tasks: BackgroundTasks):
-    """Manually trigger a check for a project"""
+async def trigger_check(project_id: str, background_tasks: BackgroundTasks):
+    """Manually trigger a check for changes"""
     
     if project_id not in projects_db:
         raise HTTPException(status_code=404, detail="Project not found")
     
-    # Run check in background
     background_tasks.add_task(check_project_for_changes, project_id)
-    
-    return {
-        "success": True,
-        "message": "Check initiated. Results will be emailed if changes detected."
-    }
+    return {"message": "Check initiated", "project_id": project_id}
 
 @app.post("/api/demo/seed")
 async def seed_demo_data():
     """Create demo project with sample data"""
-    project_id = str(uuid.uuid4())[:8]
-    
     # Create demo project
+    project_id = str(uuid.uuid4())
     projects_db[project_id] = {
         "id": project_id,
-        "name": "Tower Block A - Demo",
-        "email": os.getenv("DEMO_EMAIL", ""),
+        "name": "Downtown Tower - Level 2",
         "check_frequency": "nightly",
-        "created_at": datetime.utcnow().isoformat()
+        "email_notifications": True,
+        "notification_email": "pm@construction.com",
+        "created_at": datetime.now().isoformat(),
+        "last_checked": datetime.now().isoformat()
     }
     
-    # Create demo changes
-    demo_changes = [
+    # Add demo changes
+    changes_db[project_id] = [
         {
-            "id": str(uuid.uuid4())[:8],
-            "project_id": project_id,
+            "id": str(uuid.uuid4()),
             "element_name": "Level 2 Slab",
-            "change_type": "structural",
-            "description": "Slab moved 75mm north",
-            "cost_impact": 45000,
-            "schedule_impact": 3,
+            "description": "Moved 75mm north",
+            "cost_impact": 12500,
             "priority": "critical",
-            "affected_trades": ["MEP", "Structural"],
-            "detected_at": datetime.utcnow().isoformat()
+            "detected_at": datetime.now().isoformat()
         },
         {
-            "id": str(uuid.uuid4())[:8],
-            "project_id": project_id,
-            "element_name": "Conference Room Lighting",
-            "change_type": "mep",
+            "id": str(uuid.uuid4()),
+            "element_name": "MEP Coordination",
             "description": "12 new light fixtures added",
-            "cost_impact": 8400,
-            "schedule_impact": 1,
-            "priority": "high",
-            "affected_trades": ["Electrical"],
-            "detected_at": datetime.utcnow().isoformat()
+            "cost_impact": 3200,
+            "priority": "medium",
+            "detected_at": datetime.now().isoformat()
         },
         {
-            "id": str(uuid.uuid4())[:8],
-            "project_id": project_id,
-            "element_name": "Interior Walls",
-            "change_type": "architectural",
-            "description": "3 walls relocated",
-            "cost_impact": 3200,
-            "schedule_impact": 0.5,
-            "priority": "medium",
-            "affected_trades": ["Drywall", "Electrical"],
-            "detected_at": datetime.utcnow().isoformat()
+            "id": str(uuid.uuid4()),
+            "element_name": "Structural Column",
+            "description": "Column size increased",
+            "cost_impact": 8900,
+            "priority": "high",
+            "detected_at": datetime.now().isoformat()
         }
     ]
-    
-    changes_db[project_id] = demo_changes
     
     return {
         "success": True,
         "project_id": project_id,
-        "message": "Demo project created with automated checking enabled",
         "demo_url": f"/api/projects/{project_id}/changes"
     }
 
 @app.get("/api/projects/{project_id}/changes")
-async def get_changes(project_id: str) -> ChangeSummaryResponse:
-    """Get changes for a project"""
+async def get_project_changes(project_id: str):
+    """Get all changes for a project"""
     
+    if project_id not in projects_db:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    project = projects_db[project_id]
     changes = changes_db.get(project_id, [])
     
-    if not changes:
-        return ChangeSummaryResponse(
-            total_changes=0,
-            critical_changes=0,
-            total_cost_impact=0,
-            total_schedule_impact=0,
-            ai_summary="No changes detected. Automated checking is running nightly.",
-            changes=[]
-        )
-    
-    critical_count = len([c for c in changes if c.get("priority") == "critical"])
-    total_cost = sum(c.get("cost_impact", 0) for c in changes)
-    max_schedule = max((c.get("schedule_impact", 0) for c in changes), default=0)
-    
-    summary = f"{len(changes)} changes detected • {critical_count} critical items • ${total_cost:,.0f} cost impact"
-    
-    return ChangeSummaryResponse(
-        total_changes=len(changes),
-        critical_changes=critical_count,
-        total_cost_impact=total_cost,
-        total_schedule_impact=max_schedule,
-        ai_summary=summary,
-        changes=changes
-    )
+    return {
+        "project": project,
+        "changes": changes,
+        "summary": {
+            "total_changes": len(changes),
+            "critical_count": len([c for c in changes if c.get("priority") == "critical"]),
+            "total_cost_impact": sum(c.get("cost_impact", 0) for c in changes)
+        }
+    }
 
 @app.get("/api/projects/{project_id}/roi")
 async def get_roi_metrics(project_id: str):
-    """Get ROI metrics for a project"""
+    """Calculate ROI metrics for a project"""
+    
+    if project_id not in projects_db:
+        raise HTTPException(status_code=404, detail="Project not found")
     
     changes = changes_db.get(project_id, [])
     
-    meetings_saved = len(changes) // 2
-    hours_saved = len(changes) * 0.5
-    cost_saved = hours_saved * 155
-    decisions_accelerated = len([c for c in changes if c.get("priority") in ["critical", "high"]])
+    # Calculate metrics (simplified)
+    meetings_saved = len(changes) // 3  # Assume 1 meeting per 3 changes
+    hours_saved = meetings_saved * 2  # 2 hours per meeting
+    cost_saved = hours_saved * 150  # $150/hour average rate
     
     return {
-        "project_id": project_id,
         "meetings_saved": meetings_saved,
-        "hours_saved": round(hours_saved, 1),
-        "cost_saved": round(cost_saved, 2),
-        "decisions_accelerated": decisions_accelerated,
-        "message": f"CORVIU saved ${cost_saved:,.0f} this week through automated monitoring"
+        "hours_saved": hours_saved,
+        "cost_saved": cost_saved,
+        "decisions_accelerated": len(changes),
+        "message": f"This week CORVIU saved you {meetings_saved} meetings → ${cost_saved:,.0f}"
     }
 
 @app.post("/api/test-email")
-async def test_email(email: str):
-    """Send a test email"""
+async def test_email(to_email: str):
+    """Test email configuration"""
     
     # Create test changes
     test_changes = [
         {
             "element_name": "Test Element",
             "description": "This is a test change",
-            "priority": "high",
-            "cost_impact": 10000
+            "cost_impact": 1000,
+            "priority": "medium"
         }
     ]
     
-    success = email_service.send_change_report(email, "Test Project", test_changes)
+    success = await email_service.send_change_report(
+        to_email,
+        "Test Project",
+        test_changes
+    )
+    
+    return {"success": success, "message": "Test email sent" if success else "Email failed"}
+
+@app.get("/api/debug/test-autodesk")
+async def debug_test_autodesk(token_id: str):
+    """Debug endpoint to test Autodesk API calls"""
+    
+    if token_id not in autodesk_tokens:
+        raise HTTPException(status_code=404, detail="Token not found")
+    
+    token_data = autodesk_tokens[token_id]
+    access_token = token_data["access_token"]
+    
+    # Test user info
+    print("\n[DEBUG] Testing user info endpoint...")
+    user_info = await autodesk_integration.get_user_info(access_token)
+    
+    # Test hubs
+    print("\n[DEBUG] Testing hubs endpoint...")
+    hubs = await autodesk_integration.get_hubs(access_token)
+    
+    # Test projects for each hub
+    all_projects = []
+    for hub in hubs:
+        hub_id = hub.get("id", "")
+        print(f"\n[DEBUG] Testing projects for hub {hub_id}...")
+        projects = await autodesk_integration.get_projects(access_token, hub_id)
+        all_projects.extend(projects)
     
     return {
-        "success": success,
-        "message": "Test email sent! Check your inbox." if success else "Failed to send. Check SMTP configuration."
+        "user_info": user_info,
+        "hubs_count": len(hubs),
+        "hubs": hubs,
+        "projects_count": len(all_projects),
+        "projects": all_projects,
+        "debug_info": {
+            "token_first_chars": access_token[:20],
+            "token_length": len(access_token),
+            "client_id": autodesk_integration.client_id[:10] + "..." if autodesk_integration.client_id else "NOT SET"
+        }
     }
 
 @app.get("/debug/env")
 async def debug_env():
-    """Check what environment variables the app sees"""
+    """Debug endpoint to check environment variables"""
     return {
-        "smtp_host": os.getenv("SMTP_HOST", "not set"),
-        "smtp_port": os.getenv("SMTP_PORT", "not set"),
-        "smtp_user": "set" if os.getenv("SMTP_USER") else "not set",
-        "smtp_password": "set" if os.getenv("SMTP_PASSWORD") else "not set",
-        "from_email": os.getenv("FROM_EMAIL", "not set"),
-        "autodesk_client_id": "set" if os.getenv("AUTODESK_CLIENT_ID") else "not set",
-        "autodesk_client_secret": "set" if os.getenv("AUTODESK_CLIENT_SECRET") else "not set",
-        "checking": {
-            "SMTP_USER exists": bool(os.getenv("SMTP_USER")),
-            "SMTP_PASSWORD exists": bool(os.getenv("SMTP_PASSWORD")),
-            "AUTODESK configured": bool(os.getenv("AUTODESK_CLIENT_ID"))
-        }
+        "smtp_configured": bool(os.getenv("SMTP_USER")),
+        "autodesk_configured": bool(os.getenv("AUTODESK_CLIENT_ID")),
+        "callback_url": os.getenv("AUTODESK_CALLBACK_URL"),
+        "environment": "production" if os.getenv("DATABASE_URL") else "development"
     }
 
-# ======================== STARTUP ========================
+# ======================== STARTUP TASKS ========================
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize CORVIU with scheduler"""
-    print("""
-    ╔═══════════════════════════════════╗
-    ║       CORVIU API v2.0.0          ║
-    ║   Automated Change Monitoring     ║
-    ╚═══════════════════════════════════╝
-    """)
-    print("✅ API Started")
-    print("📧 Email Reports: " + ("Configured" if os.getenv("SMTP_USER") else "Not configured"))
-    print("🔐 Autodesk Integration: " + ("Configured" if os.getenv("AUTODESK_CLIENT_ID") else "Not configured"))
-    print("🕒 Automated Checks: Enabled")
+    """Initialize background tasks on startup"""
+    print("🚀 CORVIU API Starting...")
+    print(f"📧 Email Service: {'Configured' if email_service.smtp_user else 'Not configured'}")
+    print(f"🏗️ Autodesk Integration: {'Configured' if autodesk_integration.client_id else 'Not configured'}")
     
     # Start background scheduler
-    asyncio.create_task(run_scheduled_checks())
+    asyncio.create_task(schedule_checks())
+    
+    print("✅ CORVIU API Ready!")
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
