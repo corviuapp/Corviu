@@ -420,8 +420,6 @@ print(f"[DEBUG] Has get_item_versions: {hasattr(autodesk_integration, 'get_item_
 # === PART 2/3: Change Detection Functions and API Endpoints ===
 
 # ======================== AUTOMATED CHECKER WITH REAL DETECTION ========================
-# Replace the check_project_for_changes function (around line 447) with this corrected version:
-
 async def check_project_for_changes(project_id: str):
     """Check for real changes in Autodesk project models"""
     project = projects_db.get(project_id)
@@ -450,6 +448,9 @@ async def check_project_for_changes(project_id: str):
     
     # Get token for authentication
     token_id = project.get("token_id")
+    print(f"[DEBUG] About to call get_project_folders...")
+    print(f"[DEBUG] Integration object: {autodesk_integration}")
+    print(f"[DEBUG] Has method: {hasattr(autodesk_integration, 'get_project_folders')}")
     if not token_id or token_id not in autodesk_tokens:
         print(f"[ERROR] No valid token for project {project_id}")
         # Fall back to mock changes for demo
@@ -478,31 +479,14 @@ async def check_project_for_changes(project_id: str):
     access_token = token_data["access_token"]
     
     # Parse the Autodesk project ID to get hub
-    # ACC/BIM 360 project IDs have format: b.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-    # Extract hub_id from the stored hub information in the token
-    hub_id = None
-    
-    # First, let's get the hubs to find the right one
-    hubs = await autodesk_integration.get_hubs(access_token)
-    for hub in hubs:
-        # Get projects in this hub to find our project
-        projects = await autodesk_integration.get_projects(access_token, hub.get("id"))
-        for proj in projects:
-            if proj.get("id") == autodesk_project_id:
-                hub_id = hub.get("id")
-                break
-        if hub_id:
-            break
-    
-    if not hub_id:
-        print(f"[ERROR] Could not find hub for project {autodesk_project_id}")
-        # Return empty changes
-        changes_db[project_id] = []
-        return []
+    # Format is usually: b.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+    parts = autodesk_project_id.split(".")
+    if len(parts) >= 2:
+        hub_id = f"{parts[0]}.{parts[1].split('-')[0]}"
     
     try:
-        # 1. Get project folders - FIXED: passing correct parameters
-        print(f"[DEBUG] Getting folders for project {autodesk_project_id} in hub {hub_id}")
+        # 1. Get project folders
+        hub_id = autodesk_project_id.split('-')[0] if '-' in autodesk_project_id else autodesk_project_id
         folders = await autodesk_integration.get_project_folders(access_token, hub_id, autodesk_project_id)
         
         # Look for Project Files folder
@@ -616,11 +600,23 @@ async def check_project_for_changes(project_id: str):
         
     except Exception as e:
         print(f"[ERROR] Failed to check for changes: {str(e)}")
-        import traceback
-        traceback.print_exc()
         # Fall back to empty changes
         changes_db[project_id] = []
         return []
+
+async def schedule_checks():
+    """Background task to check projects periodically"""
+    while True:
+        try:
+            for project_id, project in projects_db.items():
+                if project.get("check_frequency") == "nightly":
+                    await check_project_for_changes(project_id)
+            
+            # Wait 24 hours (in production)
+            await asyncio.sleep(86400)
+        except Exception as e:
+            print(f"Scheduler error: {str(e)}")
+            await asyncio.sleep(3600)  # Retry in 1 hour
 
 # ======================== API ENDPOINTS ========================
 
