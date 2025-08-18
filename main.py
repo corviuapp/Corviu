@@ -403,6 +403,9 @@ async def get_project_folders(self, access_token: str, hub_id: str, project_id: 
                 return []
 
 autodesk_integration = AutodeskIntegration()
+print(f"[DEBUG] Has get_project_folders: {hasattr(autodesk_integration, 'get_project_folders')}")
+print(f"[DEBUG] Has get_folder_contents: {hasattr(autodesk_integration, 'get_folder_contents')}")
+print(f"[DEBUG] Has get_item_versions: {hasattr(autodesk_integration, 'get_item_versions')}")
 
 # === END OF PART 1 ===
 # === PART 2/3: Change Detection Functions and API Endpoints ===
@@ -436,6 +439,9 @@ async def check_project_for_changes(project_id: str):
     
     # Get token for authentication
     token_id = project.get("token_id")
+    print(f"[DEBUG] About to call get_project_folders...")
+    print(f"[DEBUG] Integration object: {autodesk_integration}")
+    print(f"[DEBUG] Has method: {hasattr(autodesk_integration, 'get_project_folders')}")
     if not token_id or token_id not in autodesk_tokens:
         print(f"[ERROR] No valid token for project {project_id}")
         # Fall back to mock changes for demo
