@@ -313,30 +313,39 @@ class AutodeskIntegration:
     async def get_project_folders(self, access_token: str, hub_id: str, project_id: str) -> List[Dict]:
         """Get all folders in a project"""
         print(f"[DEBUG] Getting folders for project: {project_id}")
-    
+        
         async with httpx.AsyncClient() as client:
-            try:
-            # For ACC/BIM360, use project_id for both hub and project in the URL
-                response = await client.get(
-                f"{self.base_url}/project/v1/hubs/{project_id}/projects/{project_id}/topFolders",
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                    "Content-Type": "application/vnd.api+json"
-                    }
-                )
+            # Try different endpoints
+            endpoints = [
+                f"{self.base_url}/project/v1/hubs/{hub_id}/projects/{project_id}/topFolders",
+                f"{self.base_url}/data/v1/projects/{project_id}/folders",
+                f"{self.base_url}/project/v1/hubs/{hub_id}/projects/{project_id}/folders:root/contents"
+            ]
             
-                if response.status_code == 200:
-                    data = response.json()
-                    folders = data.get("data", [])
-                    print(f"[DEBUG] Found {len(folders)} top folders")
-                    return folders
-                else:
-                    print(f"[ERROR] Failed to get folders: {response.status_code}")
-                    return []
-                
-            except Exception as e:
-                print(f"[ERROR] Exception getting folders: {str(e)}")
-                return []
+            for endpoint in endpoints:
+                try:
+                    print(f"[DEBUG] Trying endpoint: {endpoint}")
+                    response = await client.get(
+                        endpoint,
+                        headers={
+                            "Authorization": f"Bearer {access_token}",
+                            "Content-Type": "application/vnd.api+json"
+                        }
+                    )
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        folders = data.get("data", [])
+                        print(f"[DEBUG] Success! Found {len(folders)} folders")
+                        return folders
+                    else:
+                        print(f"[DEBUG] Endpoint failed with status: {response.status_code}")
+                        
+                except Exception as e:
+                    print(f"[DEBUG] Exception with endpoint: {str(e)}")
+            
+            print(f"[ERROR] All endpoints failed")
+            return []
     
     async def get_folder_contents(self, access_token: str, project_id: str, folder_id: str) -> List[Dict]:
         """Get contents of a folder (files and subfolders)"""
@@ -411,6 +420,8 @@ print(f"[DEBUG] Has get_item_versions: {hasattr(autodesk_integration, 'get_item_
 # === PART 2/3: Change Detection Functions and API Endpoints ===
 
 # ======================== AUTOMATED CHECKER WITH REAL DETECTION ========================
+# Replace the check_project_for_changes function (around line 447) with this corrected version:
+
 async def check_project_for_changes(project_id: str):
     """Check for real changes in Autodesk project models"""
     project = projects_db.get(project_id)
@@ -439,9 +450,6 @@ async def check_project_for_changes(project_id: str):
     
     # Get token for authentication
     token_id = project.get("token_id")
-    print(f"[DEBUG] About to call get_project_folders...")
-    print(f"[DEBUG] Integration object: {autodesk_integration}")
-    print(f"[DEBUG] Has method: {hasattr(autodesk_integration, 'get_project_folders')}")
     if not token_id or token_id not in autodesk_tokens:
         print(f"[ERROR] No valid token for project {project_id}")
         # Fall back to mock changes for demo
@@ -470,14 +478,32 @@ async def check_project_for_changes(project_id: str):
     access_token = token_data["access_token"]
     
     # Parse the Autodesk project ID to get hub
-    # Format is usually: b.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-    parts = autodesk_project_id.split(".")
-    if len(parts) >= 2:
-        hub_id = f"{parts[0]}.{parts[1].split('-')[0]}"
+    # ACC/BIM 360 project IDs have format: b.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+    # Extract hub_id from the stored hub information in the token
+    hub_id = None
+    
+    # First, let's get the hubs to find the right one
+    hubs = await autodesk_integration.get_hubs(access_token)
+    for hub in hubs:
+        # Get projects in this hub to find our project
+        projects = await autodesk_integration.get_projects(access_token, hub.get("id"))
+        for proj in projects:
+            if proj.get("id") == autodesk_project_id:
+                hub_id = hub.get("id")
+                break
+        if hub_id:
+            break
+    
+    if not hub_id:
+        print(f"[ERROR] Could not find hub for project {autodesk_project_id}")
+        # Return empty changes
+        changes_db[project_id] = []
+        return []
     
     try:
-        # 1. Get project folders
-        folders = await autodesk_integration.get_project_folders(access_token, autodesk_project_id, autodesk_project_id)
+        # 1. Get project folders - FIXED: passing correct parameters
+        print(f"[DEBUG] Getting folders for project {autodesk_project_id} in hub {hub_id}")
+        folders = await autodesk_integration.get_project_folders(access_token, hub_id, autodesk_project_id)
         
         # Look for Project Files folder
         project_files_folder = None
@@ -590,23 +616,11 @@ async def check_project_for_changes(project_id: str):
         
     except Exception as e:
         print(f"[ERROR] Failed to check for changes: {str(e)}")
+        import traceback
+        traceback.print_exc()
         # Fall back to empty changes
         changes_db[project_id] = []
         return []
-
-async def schedule_checks():
-    """Background task to check projects periodically"""
-    while True:
-        try:
-            for project_id, project in projects_db.items():
-                if project.get("check_frequency") == "nightly":
-                    await check_project_for_changes(project_id)
-            
-            # Wait 24 hours (in production)
-            await asyncio.sleep(86400)
-        except Exception as e:
-            print(f"Scheduler error: {str(e)}")
-            await asyncio.sleep(3600)  # Retry in 1 hour
 
 # ======================== API ENDPOINTS ========================
 
