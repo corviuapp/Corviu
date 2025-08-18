@@ -448,9 +448,6 @@ async def check_project_for_changes(project_id: str):
     
     # Get token for authentication
     token_id = project.get("token_id")
-    print(f"[DEBUG] About to call get_project_folders...")
-    print(f"[DEBUG] Integration object: {autodesk_integration}")
-    print(f"[DEBUG] Has method: {hasattr(autodesk_integration, 'get_project_folders')}")
     if not token_id or token_id not in autodesk_tokens:
         print(f"[ERROR] No valid token for project {project_id}")
         # Fall back to mock changes for demo
@@ -478,21 +475,40 @@ async def check_project_for_changes(project_id: str):
     token_data = autodesk_tokens[token_id]
     access_token = token_data["access_token"]
     
-    # Parse the Autodesk project ID to get hub
-    # Format is usually: b.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-    parts = autodesk_project_id.split(".")
-    if len(parts) >= 2:
-        hub_id = f"{parts[0]}.{parts[1].split('-')[0]}"
+    # Get hub_id from stored project data
+    hub_id = project.get("hub_id")
+    
+    # If hub_id not stored (backward compatibility)
+    if not hub_id:
+        print(f"[WARNING] No hub_id stored for project, attempting to find it...")
+        hubs = await autodesk_integration.get_hubs(access_token)
+        for hub in hubs:
+            projects = await autodesk_integration.get_projects(access_token, hub.get("id"))
+            for proj in projects:
+                if proj.get("id") == autodesk_project_id:
+                    hub_id = hub.get("id")
+                    # Update the project with hub_id for future use
+                    project["hub_id"] = hub_id
+                    print(f"[INFO] Found and stored hub_id: {hub_id}")
+                    break
+            if hub_id:
+                break
+    
+    if not hub_id:
+        print(f"[ERROR] Could not determine hub_id for project")
+        changes_db[project_id] = []
+        return []
     
     try:
-        # 1. Get project folders
-        hub_id = autodesk_project_id.split('-')[0] if '-' in autodesk_project_id else autodesk_project_id
+        # 1. Get project folders with correct hub_id
+        print(f"[DEBUG] Using hub_id: {hub_id} for project: {autodesk_project_id}")
         folders = await autodesk_integration.get_project_folders(access_token, hub_id, autodesk_project_id)
         
         # Look for Project Files folder
         project_files_folder = None
         for folder in folders:
             folder_name = folder.get("attributes", {}).get("name", "")
+            print(f"[DEBUG] Found folder: {folder_name}")
             if "Project Files" in folder_name or "Plans" in folder_name or "Models" in folder_name:
                 project_files_folder = folder.get("id")
                 break
@@ -500,6 +516,7 @@ async def check_project_for_changes(project_id: str):
         if not project_files_folder and folders:
             # Use first folder if no Project Files folder found
             project_files_folder = folders[0].get("id")
+            print(f"[DEBUG] Using first folder: {folders[0].get('attributes', {}).get('name', 'Unknown')}")
         
         if not project_files_folder:
             print(f"[WARNING] No folders found in project")
@@ -516,7 +533,7 @@ async def check_project_for_changes(project_id: str):
             if item.get("type") == "items":
                 file_name = item.get("attributes", {}).get("displayName", "")
                 # Look for Revit, CAD, or IFC files
-                if any(ext in file_name.lower() for ext in ['.rvt', '.dwg', '.ifc', '.nwd', '.nwc', '.rvt', '.rfa']):
+                if any(ext in file_name.lower() for ext in ['.rvt', '.dwg', '.ifc', '.nwd', '.nwc', '.rfa']):
                     model_files.append(item)
                     print(f"[DEBUG] Found model file: {file_name}")
         
@@ -600,6 +617,8 @@ async def check_project_for_changes(project_id: str):
         
     except Exception as e:
         print(f"[ERROR] Failed to check for changes: {str(e)}")
+        import traceback
+        traceback.print_exc()
         # Fall back to empty changes
         changes_db[project_id] = []
         return []
@@ -1028,7 +1047,7 @@ async def get_autodesk_projects(request: Request, token_id: str):
                         <div class="project-name">{project['project_name']}</div>
                         <div class="project-info">📍 Hub: {project['hub_name']}</div>
                         <div class="hub-label">ID: {project['project_id'][:20]}...</div>
-                        <a href="/api/projects/connect-autodesk?token_id={token_id}&autodesk_project_id={project['project_id']}&project_name={encoded_name}" class="btn">
+                        <a href="/api/projects/connect-autodesk?token_id={token_id}&autodesk_project_id={project['project_id']}&project_name={encoded_name}&hub_id={project['hub_id']}" class="btn">
                             ⚡ Connect to CORVIU
                         </a>
                     </div>
@@ -1071,7 +1090,8 @@ async def get_autodesk_projects(request: Request, token_id: str):
 async def show_connect_form(
     token_id: str,
     autodesk_project_id: str,
-    project_name: str
+    project_name: str,
+    hub_id: str = None
 ):
     """Show form to connect an Autodesk project to CORVIU"""
     
@@ -1334,6 +1354,7 @@ async def connect_autodesk_project(data: dict):
     
     token_id = data.get("token_id")
     autodesk_project_id = data.get("autodesk_project_id")
+    hub_id = data.get("hub_id")
     project_name = data.get("project_name")
     check_frequency = data.get("check_frequency", "nightly")
     email_notifications = data.get("email_notifications", False)
@@ -1348,6 +1369,7 @@ async def connect_autodesk_project(data: dict):
         "id": corviu_project_id,
         "name": project_name,
         "autodesk_project_id": autodesk_project_id,
+        "hub_id": hub_id,
         "token_id": token_id,  # IMPORTANT: Store the token_id for authentication
         "check_frequency": check_frequency,
         "email_notifications": email_notifications,
