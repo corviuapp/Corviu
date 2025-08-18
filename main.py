@@ -310,33 +310,33 @@ class AutodeskIntegration:
         return []
     
     # ===== NEW METHODS FOR REAL CHANGE DETECTION =====
-    async def get_project_folders(self, access_token: str, hub_id: str, project_id: str) -> List[Dict]:
-        """Get all folders in a project"""
-        print(f"[DEBUG] Getting folders for project: {project_id}")
-        
-        async with httpx.AsyncClient() as client:
-            try:
-                # Get top folders
-                response = await client.get(
-                    f"{self.base_url}/project/v1/hubs/{hub_id}/projects/{project_id}/topFolders",
-                    headers={
-                        "Authorization": f"Bearer {access_token}",
-                        "Content-Type": "application/vnd.api+json"
-                    }
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    folders = data.get("data", [])
-                    print(f"[DEBUG] Found {len(folders)} top folders")
-                    return folders
-                else:
-                    print(f"[ERROR] Failed to get folders: {response.status_code}")
-                    return []
-                    
-            except Exception as e:
-                print(f"[ERROR] Exception getting folders: {str(e)}")
+async def get_project_folders(self, access_token: str, hub_id: str, project_id: str) -> List[Dict]:
+    """Get all folders in a project"""
+    print(f"[DEBUG] Getting folders for project: {project_id}")
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            # For ACC/BIM360, use project_id for both hub and project in the URL
+            response = await client.get(
+                f"{self.base_url}/project/v1/hubs/{project_id}/projects/{project_id}/topFolders",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/vnd.api+json"
+                }
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                folders = data.get("data", [])
+                print(f"[DEBUG] Found {len(folders)} top folders")
+                return folders
+            else:
+                print(f"[ERROR] Failed to get folders: {response.status_code}")
                 return []
+                
+        except Exception as e:
+            print(f"[ERROR] Exception getting folders: {str(e)}")
+            return []
     
     async def get_folder_contents(self, access_token: str, project_id: str, folder_id: str) -> List[Dict]:
         """Get contents of a folder (files and subfolders)"""
