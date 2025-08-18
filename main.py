@@ -1467,8 +1467,8 @@ async def project_dashboard(project_id: str):
     
     # Calculate metrics
     total_changes = len(changes)
-    critical_count = len([c for c in changes if c.get("priority") == "critical")])
-    high_count = len([c for c in changes if c.get("priority") == "high")])
+    critical_count = len([c for c in changes if c.get("priority") == "critical"])
+    high_count = len([c for c in changes if c.get("priority") == "high"])
     total_cost = sum(c.get("cost_impact", 0) for c in changes)
     
     # Build the dashboard HTML
@@ -1731,8 +1731,6 @@ async def project_dashboard(project_id: str):
     
     return HTMLResponse(content=dashboard_html)
 
-# === END OF PART 3B ===
-# === PART 3C: Final Endpoints and Startup ===
 
 @app.get("/api/projects/{project_id}/roi")
 async def get_roi_metrics(project_id: str):
