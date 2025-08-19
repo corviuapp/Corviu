@@ -527,15 +527,54 @@ async def check_project_for_changes(project_id: str):
         # 2. Get folder contents
         contents = await autodesk_integration.get_folder_contents(access_token, autodesk_project_id, project_files_folder)
         
-        # Find model files
+        # Find model files (check main folder and subfolders)
         model_files = []
+        
+        # First check files in main folder
         for item in contents:
             if item.get("type") == "items":
                 file_name = item.get("attributes", {}).get("displayName", "")
                 # Look for Revit, CAD, or IFC files
                 if any(ext in file_name.lower() for ext in ['.rvt', '.dwg', '.ifc', '.nwd', '.nwc', '.rfa']):
                     model_files.append(item)
-                    print(f"[DEBUG] Found model file: {file_name}")
+                    print(f"[DEBUG] Found model file in main folder: {file_name}")
+        
+        # Check subfolders if no files found in main folder
+        subfolders = [item for item in contents if item.get("type") == "folders"]
+        print(f"[DEBUG] Found {len(subfolders)} subfolders to check")
+        
+        for subfolder in subfolders:
+            subfolder_id = subfolder.get("id")
+            subfolder_name = subfolder.get("attributes", {}).get("name", "Unknown")
+            print(f"[DEBUG] Checking subfolder: {subfolder_name}")
+            
+            # Get subfolder contents
+            try:
+                subfolder_contents = await autodesk_integration.get_folder_contents(
+                    access_token, 
+                    autodesk_project_id, 
+                    subfolder_id
+                )
+                
+                print(f"[DEBUG] Subfolder '{subfolder_name}' has {len(subfolder_contents)} items")
+                
+                # Check files in subfolder
+                for item in subfolder_contents:
+                    if item.get("type") == "items":
+                        file_name = item.get("attributes", {}).get("displayName", "")
+                        print(f"[DEBUG] Found file: {file_name}")
+                        # Look for any relevant files (expanding the search)
+                        if any(ext in file_name.lower() for ext in ['.rvt', '.dwg', '.ifc', '.nwd', '.nwc', '.rfa', '.pdf', '.xlsx', '.docx', '.jpg', '.png']):
+                            model_files.append(item)
+                            print(f"[DEBUG] Added file to check: {file_name}")
+            except Exception as e:
+                print(f"[ERROR] Failed to get contents of subfolder {subfolder_name}: {str(e)}")
+                continue
+        
+        print(f"[INFO] Total files found: {len(model_files)}")
+        
+        if len(model_files) == 0:
+            print(f"[INFO] No model files found. The project may not have any files uploaded yet.")
         
         # 3. Check versions and detect changes
         detected_changes = []
