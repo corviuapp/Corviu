@@ -12,6 +12,7 @@ from typing import List, Optional, Dict
 from datetime import datetime, timedelta
 import os
 import json
+import logging
 import uuid
 import asyncio
 import smtplib
@@ -20,6 +21,10 @@ from email.mime.multipart import MIMEMultipart
 import httpx
 import base64
 from urllib.parse import quote
+
+# Configure logging
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
+logging.basicConfig(level=getattr(logging, LOG_LEVEL))
 
 # Debug: Print all environment variables at startup
 print("=== ENVIRONMENT VARIABLES ===")
@@ -250,13 +255,15 @@ class AutodeskIntegration:
                 
                 if response.status_code == 200:
                     data = response.json()
-                    print(f"[DEBUG] Hubs response data: {json.dumps(data, indent=2)}")
+                    # print(f"[DEBUG] Hubs response data: {json.dumps(data, indent=2)}")  # REMOVED: Too verbose
                     hubs = data.get("data", [])
                     print(f"[DEBUG] Found {len(hubs)} hubs")
                     
-                    # Print hub details
-                    for hub in hubs:
-                        print(f"[DEBUG] Hub: {hub.get('attributes', {}).get('name', 'Unknown')} (ID: {hub.get('id')})")
+                    # Print hub summary instead of individual details
+                    # for hub in hubs:
+                    #     print(f"[DEBUG] Hub: {hub.get('attributes', {}).get('name', 'Unknown')} (ID: {hub.get('id')})")
+                    if hubs:
+                        print(f"[DEBUG] Hub names: {[h.get('attributes', {}).get('name', 'Unknown') for h in hubs]}")
                     
                     return hubs
                 elif response.status_code == 401:
@@ -295,9 +302,11 @@ class AutodeskIntegration:
                     projects = data.get("data", [])
                     print(f"[DEBUG] Found {len(projects)} projects in hub {hub_id}")
                     
-                    # Print project details
-                    for project in projects:
-                        print(f"[DEBUG] Project: {project.get('attributes', {}).get('name', 'Unknown')} (ID: {project.get('id')})")
+                    # Print project summary instead of individual details
+                    # for project in projects:
+                    #     print(f"[DEBUG] Project: {project.get('attributes', {}).get('name', 'Unknown')} (ID: {project.get('id')})")
+                    if projects:
+                        print(f"[DEBUG] Project names: {[p.get('attributes', {}).get('name', 'Unknown') for p in projects[:5]]}{'...' if len(projects) > 5 else ''}")
                     
                     return projects
                 else:
@@ -398,9 +407,13 @@ class AutodeskIntegration:
                     versions = data.get("data", [])
                     print(f"[DEBUG] Found {len(versions)} versions")
                     
-                    for version in versions:
-                        attrs = version.get("attributes", {})
-                        print(f"[DEBUG] Version {attrs.get('versionNumber')}: {attrs.get('name')} - {attrs.get('lastModifiedTime')}")
+                    # Print version summary instead of individual details
+                    # for version in versions:
+                    #     attrs = version.get("attributes", {})
+                    #     print(f"[DEBUG] Version {attrs.get('versionNumber')}: {attrs.get('name')} - {attrs.get('lastModifiedTime')}")
+                    if versions:
+                        latest = versions[0].get('attributes', {})
+                        print(f"[DEBUG] Latest version: v{latest.get('versionNumber', '?')} - {latest.get('lastModifiedTime', 'Unknown')}")
                     
                     return versions
                 else:
@@ -458,7 +471,8 @@ class AutodeskIntegration:
                 print(f"[DEBUG] Model Derivative job response: {response.status_code}")
                 if response.status_code in [200, 201]:
                     job_data = response.json()
-                    print(f"[DEBUG] Job created successfully: {job_data}")
+                    # print(f"[DEBUG] Job created successfully: {job_data}")  # REMOVED: Too verbose
+                    print(f"[DEBUG] Job created successfully with urn: {job_data.get('urn', 'N/A')}")
                     return job_data
                 else:
                     print(f"[ERROR] Model Derivative job failed: {response.text}")
@@ -512,7 +526,9 @@ class AutodeskIntegration:
                 
                 if metadata_response.status_code == 200:
                     metadata = metadata_response.json()
-                    print(f"[DEBUG] Retrieved metadata for {len(metadata.get('data', {}).get('metadata', []))} viewables")
+                    viewables_count = len(metadata.get('data', {}).get('metadata', []))
+                    print(f"[DEBUG] Retrieved metadata for {viewables_count} viewables")
+                    # Don't print full metadata object - too verbose
                     return metadata
                 else:
                     print(f"[ERROR] Failed to get metadata: {metadata_response.text}")
@@ -540,7 +556,11 @@ class AutodeskIntegration:
         
         changes = []
         
-        # Compare viewables
+        # Compare viewables - using counters instead of logging each element
+        modified_count = 0
+        deleted_count = 0
+        added_count = 0
+        
         for v1 in viewables1:
             found_match = False
             v1_name = v1.get('name', '')
@@ -562,6 +582,7 @@ class AutodeskIntegration:
                             "old_properties": v1,
                             "new_properties": v2
                         })
+                        modified_count += 1
                     break
             
             if not found_match:
@@ -570,6 +591,7 @@ class AutodeskIntegration:
                     "element": v1_name,
                     "description": f"Element {v1_name} was removed"
                 })
+                deleted_count += 1
         
         # Check for new elements
         for v2 in viewables2:
@@ -588,6 +610,9 @@ class AutodeskIntegration:
                     "element": v2_name,
                     "description": f"New element {v2_name} was added"
                 })
+                added_count += 1
+        
+        print(f"[DEBUG] Model comparison: {added_count} added, {modified_count} modified, {deleted_count} deleted")
         
         print(f"[DEBUG] Found {len(changes)} changes between model versions")
         return {"changes": changes, "total_changes": len(changes)}
@@ -854,7 +879,7 @@ async def check_project_for_changes(project_id: str):
                 # Look for Revit, CAD, or IFC files
                 if any(ext in file_name.lower() for ext in ['.rvt', '.dwg', '.ifc', '.nwd', '.nwc', '.rfa']):
                     model_files.append(item)
-                    print(f"[DEBUG] Found model file in main folder: {file_name}")
+                    # print(f"[DEBUG] Found model file in main folder: {file_name}")  # REMOVED: Too verbose
         
         # Check subfolders if no files found in main folder
         subfolders = [item for item in contents if item.get("type") == "folders"]
@@ -876,14 +901,20 @@ async def check_project_for_changes(project_id: str):
                 print(f"[DEBUG] Subfolder '{subfolder_name}' has {len(subfolder_contents)} items")
                 
                 # Check files in subfolder
+                file_count = 0
+                added_files = 0
                 for item in subfolder_contents:
                     if item.get("type") == "items":
+                        file_count += 1
                         file_name = item.get("attributes", {}).get("displayName", "")
-                        print(f"[DEBUG] Found file: {file_name}")
+                        # print(f"[DEBUG] Found file: {file_name}")  # REMOVED: Too verbose in loops
                         # Look for any relevant files (expanding the search)
                         if any(ext in file_name.lower() for ext in ['.rvt', '.dwg', '.ifc', '.nwd', '.nwc', '.rfa', '.pdf', '.xlsx', '.docx', '.jpg', '.png']):
                             model_files.append(item)
-                            print(f"[DEBUG] Added file to check: {file_name}")
+                            added_files += 1
+                            # print(f"[DEBUG] Added file to check: {file_name}")  # REMOVED: Too verbose in loops
+                
+                print(f"[DEBUG] Subfolder '{subfolder_name}': {file_count} files found, {added_files} relevant files added")
             except Exception as e:
                 print(f"[ERROR] Failed to get contents of subfolder {subfolder_name}: {str(e)}")
                 continue
