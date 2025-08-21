@@ -411,10 +411,327 @@ class AutodeskIntegration:
                 print(f"[ERROR] Exception getting versions: {str(e)}")
                 return []
 
+    # ===== MODEL DERIVATIVE API METHODS =====
+    async def setup_model_derivative(self, access_token: str, urn: str) -> Dict:
+        """Setup Model Derivative job to extract model data"""
+        print(f"[DEBUG] Setting up Model Derivative job for URN: {urn}")
+        
+        # Ensure URN is base64 encoded
+        if not urn.startswith('urn:'):
+            # If it's already base64 encoded, use as is
+            encoded_urn = urn
+        else:
+            # Base64 encode the URN
+            encoded_urn = base64.b64encode(urn.encode()).decode().rstrip('=')
+        
+        job_payload = {
+            "input": {
+                "urn": encoded_urn,
+                "compressedUrn": True,
+                "rootFilename": ""
+            },
+            "output": {
+                "destination": {
+                    "region": "US"
+                },
+                "formats": [
+                    {
+                        "type": "svf2",
+                        "views": ["2d", "3d"]
+                    }
+                ]
+            }
+        }
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    f"{self.base_url}/modelderivative/v2/designdata/job",
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Content-Type": "application/json",
+                        "x-ads-force": "true"
+                    },
+                    json=job_payload
+                )
+                
+                print(f"[DEBUG] Model Derivative job response: {response.status_code}")
+                if response.status_code in [200, 201]:
+                    job_data = response.json()
+                    print(f"[DEBUG] Job created successfully: {job_data}")
+                    return job_data
+                else:
+                    print(f"[ERROR] Model Derivative job failed: {response.text}")
+                    return {}
+                    
+            except Exception as e:
+                print(f"[ERROR] Exception setting up Model Derivative: {str(e)}")
+                return {}
+    
+    async def get_model_metadata(self, access_token: str, urn: str) -> Dict:
+        """Get model metadata including object tree and properties"""
+        print(f"[DEBUG] Getting model metadata for URN: {urn}")
+        
+        # Ensure URN is base64 encoded
+        if not urn.startswith('urn:'):
+            encoded_urn = urn
+        else:
+            encoded_urn = base64.b64encode(urn.encode()).decode().rstrip('=')
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                # First get the manifest to check derivative status
+                manifest_response = await client.get(
+                    f"{self.base_url}/modelderivative/v2/designdata/{encoded_urn}/manifest",
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Content-Type": "application/json"
+                    }
+                )
+                
+                if manifest_response.status_code != 200:
+                    print(f"[ERROR] Failed to get manifest: {manifest_response.text}")
+                    return {}
+                
+                manifest_data = manifest_response.json()
+                print(f"[DEBUG] Manifest status: {manifest_data.get('status', 'unknown')}")
+                
+                # Check if processing is complete
+                if manifest_data.get('status') != 'success':
+                    print(f"[WARNING] Model derivative not ready. Status: {manifest_data.get('status')}")
+                    return {"status": manifest_data.get('status'), "progress": manifest_data.get('progress')}
+                
+                # Get metadata
+                metadata_response = await client.get(
+                    f"{self.base_url}/modelderivative/v2/designdata/{encoded_urn}/metadata",
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Content-Type": "application/json"
+                    }
+                )
+                
+                if metadata_response.status_code == 200:
+                    metadata = metadata_response.json()
+                    print(f"[DEBUG] Retrieved metadata for {len(metadata.get('data', {}).get('metadata', []))} viewables")
+                    return metadata
+                else:
+                    print(f"[ERROR] Failed to get metadata: {metadata_response.text}")
+                    return {}
+                    
+            except Exception as e:
+                print(f"[ERROR] Exception getting model metadata: {str(e)}")
+                return {}
+    
+    async def compare_model_versions(self, access_token: str, urn1: str, urn2: str) -> Dict:
+        """Compare two model versions and identify changes"""
+        print(f"[DEBUG] Comparing model versions: {urn1} vs {urn2}")
+        
+        # Get metadata for both versions
+        metadata1 = await self.get_model_metadata(access_token, urn1)
+        metadata2 = await self.get_model_metadata(access_token, urn2)
+        
+        if not metadata1 or not metadata2:
+            print(f"[ERROR] Could not retrieve metadata for comparison")
+            return {"error": "Failed to retrieve model metadata"}
+        
+        # Extract viewables (3D models)
+        viewables1 = metadata1.get('data', {}).get('metadata', [])
+        viewables2 = metadata2.get('data', {}).get('metadata', [])
+        
+        changes = []
+        
+        # Compare viewables
+        for v1 in viewables1:
+            found_match = False
+            v1_name = v1.get('name', '')
+            v1_guid = v1.get('guid', '')
+            
+            for v2 in viewables2:
+                v2_name = v2.get('name', '')
+                v2_guid = v2.get('guid', '')
+                
+                if v1_name == v2_name or v1_guid == v2_guid:
+                    found_match = True
+                    
+                    # Check for property changes
+                    if v1 != v2:  # Simple comparison - in practice would be more sophisticated
+                        changes.append({
+                            "type": "modified",
+                            "element": v1_name,
+                            "description": f"Properties changed for {v1_name}",
+                            "old_properties": v1,
+                            "new_properties": v2
+                        })
+                    break
+            
+            if not found_match:
+                changes.append({
+                    "type": "deleted",
+                    "element": v1_name,
+                    "description": f"Element {v1_name} was removed"
+                })
+        
+        # Check for new elements
+        for v2 in viewables2:
+            v2_name = v2.get('name', '')
+            v2_guid = v2.get('guid', '')
+            found_in_v1 = False
+            
+            for v1 in viewables1:
+                if v1.get('name', '') == v2_name or v1.get('guid', '') == v2_guid:
+                    found_in_v1 = True
+                    break
+            
+            if not found_in_v1:
+                changes.append({
+                    "type": "added",
+                    "element": v2_name,
+                    "description": f"New element {v2_name} was added"
+                })
+        
+        print(f"[DEBUG] Found {len(changes)} changes between model versions")
+        return {"changes": changes, "total_changes": len(changes)}
+    
+    async def calculate_real_cost_impact(self, changes: List[Dict], model_type: str = "revit") -> List[Dict]:
+        """Calculate real cost impact based on model analysis"""
+        print(f"[DEBUG] Calculating cost impact for {len(changes)} changes in {model_type} model")
+        
+        # Cost multipliers based on change type and model type
+        cost_multipliers = {
+            "revit": {
+                "added": 1.5,
+                "modified": 1.2,
+                "deleted": 0.8,
+                "structural": 2.0,
+                "mep": 1.3,
+                "architectural": 1.0
+            },
+            "dwg": {
+                "added": 1.2,
+                "modified": 1.0,
+                "deleted": 0.5,
+                "structural": 1.5,
+                "mep": 1.1,
+                "architectural": 0.8
+            }
+        }
+        
+        base_costs = {
+            "structural": 15000,
+            "mep": 8000,
+            "architectural": 5000,
+            "generic": 3000
+        }
+        
+        enriched_changes = []
+        
+        for change in changes:
+            change_type = change.get('type', 'modified')
+            element_name = change.get('element', '').lower()
+            
+            # Determine element category
+            if any(keyword in element_name for keyword in ['beam', 'column', 'slab', 'foundation', 'structural']):
+                category = 'structural'
+            elif any(keyword in element_name for keyword in ['hvac', 'electrical', 'plumbing', 'mep', 'duct', 'pipe']):
+                category = 'mep'
+            elif any(keyword in element_name for keyword in ['wall', 'door', 'window', 'room', 'floor', 'ceiling']):
+                category = 'architectural'
+            else:
+                category = 'generic'
+            
+            # Calculate base cost
+            base_cost = base_costs.get(category, base_costs['generic'])
+            
+            # Apply multipliers
+            type_multiplier = cost_multipliers.get(model_type, cost_multipliers['revit']).get(change_type, 1.0)
+            category_multiplier = cost_multipliers.get(model_type, cost_multipliers['revit']).get(category, 1.0)
+            
+            final_cost = int(base_cost * type_multiplier * category_multiplier)
+            
+            # Determine priority based on cost and type
+            if final_cost > 20000 or category == 'structural':
+                priority = 'critical'
+            elif final_cost > 10000 or change_type == 'added':
+                priority = 'high'
+            else:
+                priority = 'medium'
+            
+            enriched_change = {
+                **change,
+                "cost_impact": final_cost,
+                "priority": priority,
+                "category": category,
+                "analysis": {
+                    "base_cost": base_cost,
+                    "type_multiplier": type_multiplier,
+                    "category_multiplier": category_multiplier,
+                    "reasoning": f"{category.title()} {change_type} with {type_multiplier}x type and {category_multiplier}x category multiplier"
+                }
+            }
+            
+            enriched_changes.append(enriched_change)
+        
+        print(f"[DEBUG] Cost analysis complete. Total estimated impact: ${sum(c['cost_impact'] for c in enriched_changes):,}")
+        return enriched_changes
+
 autodesk_integration = AutodeskIntegration()
 print(f"[DEBUG] Has get_project_folders: {hasattr(autodesk_integration, 'get_project_folders')}")
 print(f"[DEBUG] Has get_folder_contents: {hasattr(autodesk_integration, 'get_folder_contents')}")
 print(f"[DEBUG] Has get_item_versions: {hasattr(autodesk_integration, 'get_item_versions')}")
+print(f"[DEBUG] Has setup_model_derivative: {hasattr(autodesk_integration, 'setup_model_derivative')}")
+print(f"[DEBUG] Has get_model_metadata: {hasattr(autodesk_integration, 'get_model_metadata')}")
+print(f"[DEBUG] Has compare_model_versions: {hasattr(autodesk_integration, 'compare_model_versions')}")
+print(f"[DEBUG] Has calculate_real_cost_impact: {hasattr(autodesk_integration, 'calculate_real_cost_impact')}")
+
+# ===== HELPER FUNCTIONS =====
+async def _create_basic_file_change(latest_version: Dict, previous_version: Dict, file_name: str) -> Dict:
+    """Create a basic file change when Model Derivative API is not available"""
+    latest_attrs = latest_version.get("attributes", {})
+    previous_attrs = previous_version.get("attributes", {})
+    
+    # Calculate cost impact based on file type and size
+    file_size_change = latest_attrs.get("storageSize", 0) - previous_attrs.get("storageSize", 0)
+    base_cost = 5000
+    
+    # Adjust cost based on file type
+    if '.rvt' in file_name.lower():
+        base_cost = 15000
+    elif '.dwg' in file_name.lower():
+        base_cost = 8000
+    elif '.ifc' in file_name.lower():
+        base_cost = 10000
+    
+    # Adjust cost based on size change
+    if abs(file_size_change) > 1000000:  # More than 1MB change
+        base_cost *= 1.5
+    
+    # Determine priority
+    priority = "medium"
+    if '.rvt' in file_name.lower():
+        priority = "high"
+        if abs(file_size_change) > 5000000:  # More than 5MB change in Revit file
+            priority = "critical"
+    
+    # Create change record
+    change = {
+        "id": str(uuid.uuid4()),
+        "element_name": file_name,
+        "description": f"Updated from v{previous_attrs.get('versionNumber', '?')} to v{latest_attrs.get('versionNumber', '?')}",
+        "cost_impact": base_cost,
+        "priority": priority,
+        "detected_at": datetime.now().isoformat(),
+        "details": {
+            "file_size_change": file_size_change,
+            "last_modified": latest_attrs.get("lastModifiedTime"),
+            "modified_by": latest_attrs.get("lastModifiedUserName", "Unknown"),
+            "version_number": latest_attrs.get("versionNumber"),
+            "previous_version": previous_attrs.get("versionNumber"),
+            "comment": latest_attrs.get("comments", "No comments"),
+            "analysis_method": "basic_file_comparison"
+        }
+    }
+    
+    return change
 
 # === END OF PART 1 ===
 # === PART 2/3: Change Detection Functions and API Endpoints ===
@@ -576,66 +893,116 @@ async def check_project_for_changes(project_id: str):
         if len(model_files) == 0:
             print(f"[INFO] No model files found. The project may not have any files uploaded yet.")
         
-        # 3. Check versions and detect changes
+        # 3. Check versions and detect changes using Model Derivative API
         detected_changes = []
         
         for model_file in model_files:
             item_id = model_file.get("id")
             file_name = model_file.get("attributes", {}).get("displayName", "")
             
+            # Skip non-model files for Model Derivative analysis
+            if not any(ext in file_name.lower() for ext in ['.rvt', '.dwg', '.ifc', '.nwd', '.nwc']):
+                print(f"[DEBUG] Skipping non-model file: {file_name}")
+                continue
+            
             # Get versions
             versions = await autodesk_integration.get_item_versions(access_token, autodesk_project_id, item_id)
             
             if len(versions) > 1:
-                # Compare latest two versions
+                # Compare latest two versions using Model Derivative API
                 latest_version = versions[0]
                 previous_version = versions[1]
                 
                 latest_attrs = latest_version.get("attributes", {})
                 previous_attrs = previous_version.get("attributes", {})
                 
-                # Calculate cost impact based on file type and size
-                file_size_change = latest_attrs.get("storageSize", 0) - previous_attrs.get("storageSize", 0)
-                base_cost = 5000
+                print(f"[DEBUG] Analyzing model changes for {file_name}")
                 
-                # Adjust cost based on file type
-                if '.rvt' in file_name.lower():
-                    base_cost = 15000
-                elif '.dwg' in file_name.lower():
-                    base_cost = 8000
-                elif '.ifc' in file_name.lower():
-                    base_cost = 10000
+                # Get URNs for both versions (these are typically stored in the version data)
+                latest_urn = None
+                previous_urn = None
                 
-                # Adjust cost based on size change
-                if abs(file_size_change) > 1000000:  # More than 1MB change
-                    base_cost *= 1.5
+                # Try to extract URN from version relationships or storage location
+                latest_relationships = latest_version.get("relationships", {})
+                previous_relationships = previous_version.get("relationships", {})
                 
-                # Determine priority
-                priority = "medium"
-                if '.rvt' in file_name.lower():
-                    priority = "high"
-                    if abs(file_size_change) > 5000000:  # More than 5MB change in Revit file
-                        priority = "critical"
+                # Look for storage information that contains URN
+                if "storage" in latest_relationships:
+                    storage_data = latest_relationships["storage"].get("data", {})
+                    latest_urn = storage_data.get("id", "")
                 
-                # Create change record
-                change = {
-                    "id": str(uuid.uuid4()),
-                    "element_name": file_name,
-                    "description": f"Updated from v{previous_attrs.get('versionNumber', '?')} to v{latest_attrs.get('versionNumber', '?')}",
-                    "cost_impact": base_cost,
-                    "priority": priority,
-                    "detected_at": datetime.now().isoformat(),
-                    "details": {
-                        "file_size_change": file_size_change,
-                        "last_modified": latest_attrs.get("lastModifiedTime"),
-                        "modified_by": latest_attrs.get("lastModifiedUserName", "Unknown"),
-                        "version_number": latest_attrs.get("versionNumber"),
-                        "previous_version": previous_attrs.get("versionNumber"),
-                        "comment": latest_attrs.get("comments", "No comments")
-                    }
-                }
+                if "storage" in previous_relationships:
+                    storage_data = previous_relationships["storage"].get("data", {})
+                    previous_urn = storage_data.get("id", "")
                 
-                detected_changes.append(change)
+                # If URNs are available, use Model Derivative API for deep analysis
+                if latest_urn and previous_urn and latest_urn != previous_urn:
+                    print(f"[DEBUG] Performing Model Derivative comparison for {file_name}")
+                    
+                    # Setup Model Derivative jobs for both versions
+                    latest_job = await autodesk_integration.setup_model_derivative(access_token, latest_urn)
+                    previous_job = await autodesk_integration.setup_model_derivative(access_token, previous_urn)
+                    
+                    # Wait a moment for processing to start
+                    await asyncio.sleep(2)
+                    
+                    # Compare model versions using metadata
+                    comparison_result = await autodesk_integration.compare_model_versions(
+                        access_token, previous_urn, latest_urn
+                    )
+                    
+                    if comparison_result and "changes" in comparison_result:
+                        model_changes = comparison_result["changes"]
+                        
+                        # Determine model type for cost calculation
+                        model_type = "revit" if '.rvt' in file_name.lower() else "dwg" if '.dwg' in file_name.lower() else "generic"
+                        
+                        # Calculate real cost impact using the new method
+                        enriched_changes = await autodesk_integration.calculate_real_cost_impact(
+                            model_changes, model_type
+                        )
+                        
+                        # Convert model changes to CORVIU format
+                        for change in enriched_changes:
+                            corviu_change = {
+                                "id": str(uuid.uuid4()),
+                                "element_name": f"{file_name}: {change.get('element', 'Unknown Element')}",
+                                "description": change.get('description', 'Model derivative analysis detected change'),
+                                "cost_impact": change.get('cost_impact', 5000),
+                                "priority": change.get('priority', 'medium'),
+                                "detected_at": datetime.now().isoformat(),
+                                "details": {
+                                    "change_type": change.get('type', 'modified'),
+                                    "category": change.get('category', 'generic'),
+                                    "file_name": file_name,
+                                    "last_modified": latest_attrs.get("lastModifiedTime"),
+                                    "modified_by": latest_attrs.get("lastModifiedUserName", "Unknown"),
+                                    "version_number": latest_attrs.get("versionNumber"),
+                                    "previous_version": previous_attrs.get("versionNumber"),
+                                    "model_analysis": change.get('analysis', {}),
+                                    "urns": {
+                                        "latest": latest_urn,
+                                        "previous": previous_urn
+                                    }
+                                }
+                            }
+                            detected_changes.append(corviu_change)
+                        
+                        print(f"[SUCCESS] Model Derivative API found {len(enriched_changes)} changes in {file_name}")
+                    else:
+                        print(f"[WARNING] Model Derivative comparison failed or returned no changes for {file_name}")
+                        # Fall back to basic file comparison
+                        basic_change = await _create_basic_file_change(latest_version, previous_version, file_name)
+                        if basic_change:
+                            detected_changes.append(basic_change)
+                else:
+                    print(f"[DEBUG] No URNs available for Model Derivative analysis, using basic file comparison")
+                    # Fall back to basic file-level comparison
+                    basic_change = await _create_basic_file_change(latest_version, previous_version, file_name)
+                    if basic_change:
+                        detected_changes.append(basic_change)
+            else:
+                print(f"[DEBUG] Only one version found for {file_name}, skipping comparison")
         
         # 4. Store the changes
         changes_db[project_id] = detected_changes
